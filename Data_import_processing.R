@@ -1,6 +1,7 @@
 library(tidyverse)
 library(lubridate)
 library(zoo)
+# library(impute)
 
 
 rm(list= ls())
@@ -61,6 +62,12 @@ ggplot(gauge_data17, aes(x= Q_m3s, y= SC)) +geom_point(aes(col=period), size=2 )
   scale_colour_brewer(palette = "Dark2")+
   theme_cust()+
   theme(legend.position="None") 
+
+# Trimming timeseries data to the window where we consistently have Q and SC. 
+bounds16 <- data.frame("datetime" =as.POSIXct(c('04/28/2016 00:00:00','10/06/2016 23:45:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage"))
+bounds17 <- data.frame("datetime" =as.POSIXct(c('04/20/2017 14:00:00','10/17/2017 11:30:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage"))
+gauge_data16<-gauge_data16[ which(gauge_data16$datetime >= bounds16[1,] & gauge_data16$datetime <= bounds16[2,]), ]
+gauge_data17<-gauge_data17[ which(gauge_data17$datetime >= bounds17[1,] & gauge_data17$datetime <= bounds17[2,]), ]
 
 # Creating a moving average for timeseries plots and analysis
 swindow <- 192
