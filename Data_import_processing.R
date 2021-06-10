@@ -163,8 +163,9 @@ gauge_data18$Qm3s_filled<- na_interpolation(gauge_data18$Q_m3s, option = "linear
 
 gauge_data19$SC_filled<- na_interpolation(gauge_data19$SC, option = "linear", maxgap = Inf)
 
+# Using K means on filled data
+gauge_data16$SC_norm <- (max(gauge_data16$SC_filled)-gauge_data16$SC_filled)/(max(gauge_data16$SC_filled)-min(gauge_data16$SC_filled))
 
 # Using Signal Package to smooth data with "butter" filter
-
 
 gauge_data16$SC_filter<- signal::filter(signal::butter(2,1/5,type='low'),gauge_data16$SC_filled) 
