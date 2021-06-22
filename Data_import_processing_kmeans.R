@@ -5,7 +5,12 @@ library(imputeTS)
 library(ggpubr)
 library(signal)
 library(strucchange)
+library(xts)
+library(dygraphs)
+library(RcppRoll)
+library(factoextra)
 library(rioja)
+
 
 rm(list= ls())
 
@@ -27,13 +32,14 @@ gauge_data19 = read_csv('data/wolvQ_19season_m.csv')
 gauge_data18$datetime<- as.POSIXct(gauge_data18$datetime,TZ = "America/Anchorage", format="%m/%d/%Y %H:%M:%S")
 gauge_data19$datetime<- as.POSIXct(gauge_data19$datetime,TZ = "America/Anchorage", format="%m/%d/%Y %H:%M:%S")
 
-###### Working with the time series data ###############
+###### Working with the timeseries data ###############
 # Creating a variable for the manually identified breaks in the 16 and 17 datasets
 dates16 <- c('05-19-2016 23:45:00','06-13-2016 23:45:00','07-16-2016 23:45:00')
 breaks16 <- data.frame("datetime" = as.POSIXct(dates16,TZ = "America/Anchorage", format="%m-%d-%Y %H:%M:%S"))
 breaks17 <- data.frame("datetime" =as.POSIXct(c('05/12/2017 23:45:00','06/22/2017 23:45:00','08/19/2017 23:45:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage"))
 
 # Sub-setting weather data 
+### ALERT! this currently does not work, need to deal with the fact that years are coming in as 0097 instead of 97, etc. 
 season_time<- c(gauge_data16$datetime[1],tail(gauge_data16$datetime, n=1),gauge_data17$datetime[1],tail(gauge_data17$datetime, n=1))
 precip16 <- data.frame(subset(full_wx, Date >= season_time[1] | Date < season_time[2],select=c(Date, Precip_MeasuredWindSpeed_UndercatchAdj)))
 
@@ -170,6 +176,106 @@ gauge_data18$Qm3s_filled<- na_interpolation(gauge_data18$Q_m3s, option = "linear
 gauge_data19$SC_filled<- na_interpolation(gauge_data19$SC, option = "linear", maxgap = Inf)
 
 # Using K means on filled data
-gauge_data16$SC_norm <- (max(gauge_data16$SC_filled)-gauge_data16$SC_filled)/(max(gauge_data16$SC_filled)-min(gauge_data16$SC_filled))
+
+# first, normalizing all the data
+gauge_data16$SC_norm <- 1-(max(gauge_data16$SC_filled)-gauge_data16$SC_filled)/(max(gauge_data16$SC_filled)-min(gauge_data16$SC_filled))
+gauge_data16$Q_norm <- 1-(max(gauge_data16$Q_cfs)-gauge_data16$Q_cfs)/(max(gauge_data16$Q_cfs)-min(gauge_data16$Q_cfs))
+gauge_data16$integer <- seq(from = 1, to= length(gauge_data16$Q_cfs), by=1)
+gauge_data16$int_as_prop <- 1-(max(gauge_data16$integer)-gauge_data16$integer)/(max(gauge_data16$integer)-min(gauge_data16$integer))
+
+gauge_data17$SC_norm <- 1-(max(gauge_data17$SC_filled)-gauge_data17$SC_filled)/(max(gauge_data17$SC_filled)-min(gauge_data17$SC_filled))
+gauge_data17$Q_norm <- 1-(max(gauge_data17$Q_cfs)-gauge_data17$Q_cfs)/(max(gauge_data17$Q_cfs)-min(gauge_data17$Q_cfs))
+gauge_data17$integer <- seq(from = 1, to= length(gauge_data17$Q_cfs), by=1)
+gauge_data17$int_as_prop <- 1-(max(gauge_data17$integer)-gauge_data17$integer)/(max(gauge_data17$integer)-min(gauge_data17$integer))
+
+# Using smoothing filters 
+
+# Loess
+ 
+# pretty darned righteous. no unwanted bumps. no head/tail anomalies. hard to
+# optimize (lots of parameters), but maybe search can be automated.
+
+ 
+ loess_mod <- loess(SC_filled ~ integer, data = gauge_data16, span = 0.02)
+ 
+ gauge_data16$SC_loess <- predict(loess_mod, newdata = gauge_data16)
+ 
+ 
+ loess_modQ <- loess(Q_m3s ~ integer, data = gauge_data16, span = 0.02)
+ 
+ gauge_data16$Q_loess <- predict(loess_modQ, newdata = gauge_data16)
+ 
+ all_xts <- xts(gauge_data16 %>%
+                  select(c('SC_loess', 'SC_filled','Q_m3s','Q_loess')),
+                order.by=gauge_data16$datetime)
+ dygraph(all_xts)
+ 
+ loess_mod17 <- loess(SC_filled ~ integer, data = gauge_data17, span = 0.02)
+ 
+ gauge_data17$SC_loess <- predict(loess_mod17, newdata = gauge_data17)
+ 
+ 
+ loess_modQ17 <- loess(Q_m3s ~ integer, data = gauge_data17, span = 0.02)
+ 
+ gauge_data17$Q_loess <- predict(loess_modQ17, newdata = gauge_data17)
+ 
+ all_xts <- xts(gauge_data17 %>%
+                  select(c('SC_loess', 'SC_filled','Q_m3s','Q_loess')),
+                order.by=gauge_data17$datetime)
+ dygraph(all_xts)
+ 
+ #normalizing smoothed data
+ gauge_data16$SC_loessnorm <- 1-(max(gauge_data16$SC_loess)-gauge_data16$SC_loess)/(max(gauge_data16$SC_loess)-min(gauge_data16$SC_loess))
+ gauge_data16$Q_loessnorm <- 1-(max(gauge_data16$Q_loess)-gauge_data16$Q_loess)/(max(gauge_data16$Q_loess)-min(gauge_data16$Q_loess))
+
+ 
+ gauge_data17$SC_loessnorm <- 1-(max(gauge_data17$SC_loess)-gauge_data17$SC_loess)/(max(gauge_data17$SC_loess)-min(gauge_data17$SC_loess))
+ gauge_data17$Q_loessnorm <- 1-(max(gauge_data17$Q_loess)-gauge_data17$Q_loess)/(max(gauge_data17$Q_loess)-min(gauge_data17$Q_loess))
+ 
+ #ggplot(data = NULL, aes(x = gauge_data16$datetime, y=gauge_data16$Q_m3s)) +geom_line(color = "blue2") +
+ #  geom_line(aes(x = gauge_data16$datetime, y= filtered$SC_loess/10), color = "darkorchid2") +
+ #  xlab(NULL) + ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+ #  theme_cust()
+ 
+ 
+ # testing k-means 
+ #setting up matrix for cluster analysis
+ kmeans16 <- gauge_data16[ ,c("SC_loessnorm", "Q_loessnorm", "int_as_prop")]
+ kmeans17 <- gauge_data17[ ,c("SC_loessnorm", "Q_loessnorm", "int_as_prop")]
+ 
+ #Determining optimum number of clusters, elbow method - total within sum of square
+ fviz_nbclust(kmeans16, kmeans, method = "wss") +
+   geom_vline(xintercept = 4, linetype = 2)
+ 
+ fviz_nbclust(kmeans17, kmeans, method = "wss") +
+   geom_vline(xintercept = 4, linetype = 2)
+ 
+ # testing k-means on 2016 - just smoothed data with no
+ kmeans16 <- gauge_data16[ ,c("SC_loessnorm", "Q_loessnorm", "int_as_prop")]
+ kmeans16ans <- kmeans(kmeans16,3,nstart=25)
+ 
+ ggplot(gauge_data16, aes(x= datetime, y= Q_cfs)) +geom_point(aes(color= kmeans16ans$cluster))+
+   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")")))+
+   xlab(NULL) + 
+   theme_cust()
 
 
+ ggplot(gauge_data16, aes(x= Q_loess, y= SC_loess)) +geom_point(aes(color= kmeans16ans$cluster))+
+   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")")))+
+   xlab(NULL) + 
+   theme_cust()
+
+ # testing k-means on 2017
+ kmeans17 <- gauge_data17[ ,c("SC_loessnorm", "Q_loessnorm", "int_as_prop")]
+ kmeans17ans <- kmeans(kmeans17,5,nstart=25)
+ 
+ ggplot(gauge_data17, aes(x= datetime, y= Q_cfs)) +geom_point(aes(color= kmeans17ans$cluster))+
+   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")")))+
+   xlab(NULL) + 
+   theme_cust()
+ 
+ 
+ ggplot(gauge_data17, aes(x= Q_loess, y= SC_loess)) +geom_point(aes(color= kmeans17ans$cluster))+
+   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+   xlab(NULL) + 
+   theme_cust()
