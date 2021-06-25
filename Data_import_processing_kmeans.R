@@ -18,8 +18,8 @@ rm(list= ls())
 full_data16 = read_csv('data/WG_chemsitry_2016.csv')
 full_data17 = read_csv('data/WG_chem_2017.csv')
 
-full_wx = read_csv('data/WolvWX990_reduced.csv')
-full_wx$Date<- as.POSIXct(full_wx$Date,TZ = "America/Anchorage", format="%m/%d/%Y")
+full_wx = read_csv('data/wolverine990_15min_LVL2_1619.csv')
+full_wx$local_time<- as.POSIXct(full_wx$local_time,TZ = "America/Anchorage", format="%m/%d/%Y %H:%M")
 
 gauge_data16 = read_delim('data/wolvQ_16season_m.txt',"\t")
 gauge_data17 = read_delim('data/wolvQ_17season_m.txt',"\t")
@@ -38,10 +38,7 @@ dates16 <- c('05-19-2016 23:45:00','06-13-2016 23:45:00','07-16-2016 23:45:00')
 breaks16 <- data.frame("datetime" = as.POSIXct(dates16,TZ = "America/Anchorage", format="%m-%d-%Y %H:%M:%S"))
 breaks17 <- data.frame("datetime" =as.POSIXct(c('05/12/2017 23:45:00','06/22/2017 23:45:00','08/19/2017 23:45:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage"))
 
-# Sub-setting weather data 
-### ALERT! this currently does not work, need to deal with the fact that years are coming in as 0097 instead of 97, etc. 
-season_time<- c(gauge_data16$datetime[1],tail(gauge_data16$datetime, n=1),gauge_data17$datetime[1],tail(gauge_data17$datetime, n=1))
-precip16 <- data.frame(subset(full_wx, Date >= season_time[1] | Date < season_time[2],select=c(Date, Precip_MeasuredWindSpeed_UndercatchAdj)))
+
 
 #Calculating q in m3/s
 gauge_data16$Q_m3s <- gauge_data16$Q_cfs * 0.028316847 
@@ -125,6 +122,9 @@ bounds17 <- data.frame("datetime" =as.POSIXct(c('04/20/2017 14:00:00','10/17/201
 gauge_data16<-gauge_data16[ which(gauge_data16$datetime >= bounds16[1,] & gauge_data16$datetime <= bounds16[2,]), ]
 gauge_data17<-gauge_data17[ which(gauge_data17$datetime >= bounds17[1,] & gauge_data17$datetime <= bounds17[2,]), ]
 
+
+
+
 # Creating a moving average for timeseries plots and analysis
 swindow <- 192
 smoothed_16 <- data.frame("Q_m3s" = rollapply(gauge_data16$Q_m3s,swindow,mean, na.rm = TRUE, fill = NA))
@@ -175,7 +175,21 @@ gauge_data18$Qm3s_filled<- na_interpolation(gauge_data18$Q_m3s, option = "linear
 
 gauge_data19$SC_filled<- na_interpolation(gauge_data19$SC, option = "linear", maxgap = Inf)
 
-# Using K means on filled data
+###### Sub-setting weather data ############
+
+#2016
+precip16 <- data.frame(full_wx$Precip_Weighing_Incremental[full_wx$local_time >= bounds16[1,] & full_wx$local_time <= bounds16[2,]])
+precip16$datetime <- full_wx$local_time[full_wx$local_time >= bounds16[1,] & full_wx$local_time <= bounds16[2,]]
+names(precip16)[1] <- "precip16int"
+
+# 2017
+precip17 <- data.frame(full_wx$Precip_Weighing_Incremental[full_wx$local_time >= bounds17[1,] & full_wx$local_time <= bounds17[2,]])
+precip17$datetime <- full_wx$local_time[full_wx$local_time >= bounds17[1,] & full_wx$local_time <= bounds17[2,]]
+names(precip17)[1] <- "precip17int"
+merged17<- merge.xts(xts(gauge_data17$Q_m3s, as.POSIXct(gauge_data17$datetime)),xts(gauge_data17$SC_filled, as.POSIXct(gauge_data17$datetime)),xts(precip17$precip17int, as.POSIXct(precip17$datetime)),fill=NA)
+names(merged17)<- c("Q_m3s","SC_filled", "precip17")  
+merged17$SC_filled<- na_interpolation(merged17$SC_filled, option = "linear", maxgap = Inf)
+merged17$Q_m3s<- na_interpolation(merged17$Q_m3s, option = "linear", maxgap = Inf)
 
 # first, normalizing all the data
 gauge_data16$SC_norm <- 1-(max(gauge_data16$SC_filled)-gauge_data16$SC_filled)/(max(gauge_data16$SC_filled)-min(gauge_data16$SC_filled))
@@ -237,10 +251,16 @@ gauge_data17$int_as_prop <- 1-(max(gauge_data17$integer)-gauge_data17$integer)/(
  #  xlab(NULL) + ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
  #  theme_cust()
  
+ #normalizing precip data and adding it to the gauge data frame
+ is.nan.data.frame <- function(x)
+   do.call(cbind, lapply(x, is.nan))
+ precip16[is.nan(precip16)] <- 0
  
- # testing k-means 
+ gauge_data16$Precip_norm <- 1-(max(precip16$precip16int)-precip16$precip16int)/(max(precip16$precip16int)-min(precip16$precip16int))
+ 
+ ###### testing k-means #######
  #setting up matrix for cluster analysis
- kmeans16 <- gauge_data16[ ,c("SC_loessnorm", "Q_loessnorm", "int_as_prop")]
+ kmeans16 <- gauge_data16[ ,c("SC_loessnorm", "Q_loessnorm", "int_as_prop","Precip_norm")]
  kmeans17 <- gauge_data17[ ,c("SC_loessnorm", "Q_loessnorm", "int_as_prop")]
  
  #Determining optimum number of clusters, elbow method - total within sum of square
@@ -251,16 +271,16 @@ gauge_data17$int_as_prop <- 1-(max(gauge_data17$integer)-gauge_data17$integer)/(
    geom_vline(xintercept = 4, linetype = 2)
  
  # testing k-means on 2016 - just smoothed data with no
- kmeans16 <- gauge_data16[ ,c("SC_loessnorm", "Q_loessnorm", "int_as_prop")]
- kmeans16ans <- kmeans(kmeans16,3,nstart=25)
  
- ggplot(gauge_data16, aes(x= datetime, y= Q_cfs)) +geom_point(aes(color= kmeans16ans$cluster))+
+ kmeans16ans <- kmeans(kmeans16,4,nstart=25)
+ 
+ ggplot(gauge_data16, aes(x= datetime, y= SC_filled)) +geom_point(aes(color= kmeans16ans$cluster))+
    ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")")))+
    xlab(NULL) + 
    theme_cust()
 
 
- ggplot(gauge_data16, aes(x= Q_loess, y= SC_loess)) +geom_point(aes(color= kmeans16ans$cluster))+
+ ggplot(gauge_data16, aes(x= Q_m3s, y= SC_filled)) +geom_point(aes(color= kmeans16ans$cluster))+
    ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")")))+
    xlab(NULL) + 
    theme_cust()
@@ -279,3 +299,109 @@ gauge_data17$int_as_prop <- 1-(max(gauge_data17$integer)-gauge_data17$integer)/(
    ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
    xlab(NULL) + 
    theme_cust()
+ 
+ ######### Messing with depth-constrained clustering (to constrain clusters in time)##############
+ 
+#Tried running it with 15 min data and it was taking too long (may try overnight, but not super practical)
+ #So moving to try it with 1-hour intervals - averaging the Q and EC, and summing precip
+#2016 
+SC.xts <- xts(gauge_data16$SC_filled, as.POSIXct(gauge_data16$datetime)) 
+hourly_data <- data.frame(period.apply(SC.xts,endpoints(SC.xts,"hours"),mean))
+names(hourly_data)[1] <- "SC_filledhourly"
+Q.xts <- xts(gauge_data16$Q_m3s, as.POSIXct(gauge_data16$datetime)) 
+hourly_data$Q_m3shourly <- period.apply(Q.xts,endpoints(Q.xts,"hours"),mean)
+precip.xts <- xts(precip16, as.POSIXct(gauge_data16$datetime)) 
+hourly_data$precip_hourlysum <- period.sum(precip.xts[,1],endpoints(precip.xts,"hours"))
+
+hourly_norm<- data.frame(1-(max(hourly_data$precip_hourlysum)-hourly_data$precip_hourlysum)/(max(hourly_data$precip_hourlysum)-min(hourly_data$precip_hourlysum)))
+names(hourly_norm)[1] <- "Precip_hr_norm"
+hourly_norm$SC_hr_norm<- data.frame(1-(max(hourly_data$SC_filledhourly)-hourly_data$SC_filledhourly)/(max(hourly_data$SC_filledhourly)-min(hourly_data$SC_filledhourly)))
+hourly_norm$Q_hr_norm<- data.frame(1-(max(hourly_data$Q_m3shourly)-hourly_data$Q_m3shourly)/(max(hourly_data$Q_m3shourly)-min(hourly_data$Q_m3shourly)))
+
+ #dep_con16 <- gauge_data16[ ,c("SC_loessnorm", "Q_loessnorm","Precip_norm")]
+ #dep_con16_dist <- dist(dep_con16, method = "euclidean")
+ 
+dep_con16_dist <- dist(hourly_norm, method = "euclidean")
+ dep16_clust <- chclust(dep_con16_dist, method = "coniss")
+ bstick(dep16_clust, ng=20, plot=TRUE)
+ memb<-cutree(dep16_clust,k=5)
+ #cent<- NULL
+ #for (k in 1:5){cent<- rbind(cent,colMeans(hourly_norm[memb==k, ,drop = FALSE]))}
+ #dep16clust5 <- chclust(dist(cent, method = "euclidean"), method = "coniss",members = table(memb))
+ 
+ 
+ 
+ ggplot(hourly_data, aes(x=Q_m3shourly , y= SC_filledhourly)) +geom_point(aes(color= factor(memb)))+
+    scale_colour_brewer(palette = "Dark2")+
+   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+   theme_cust()
+ 
+ new_df = data.frame(new_df = index(hourly_data$Q_m3shourly), coredata(hourly_data$Q_m3shourly))
+ colnames(new_df) = c("date","Q_m3shourly")
+ new_df$SC_filledhourly <- hourly_data$SC_filledhourly
+ 
+ ggplot(new_df, aes(x= date , y= Q_m3shourly)) +geom_point(aes(color= factor(memb)))+
+   #scale_color_discrete(drop=FALSE)+
+   scale_colour_brewer(palette = "Dark2")+
+   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+   xlab(NULL) + 
+   theme_cust()
+ 
+ for (k  in 1:length(unique(memb))) {
+   temp <- new_df$date[which(memb==k)]
+   if (k== 1){
+     p_time <- as.POSIXct(tail(temp,n=1)) 
+   } else{
+     p_time [k] <- tail(temp, n=1)}
+ }
+ print(p_time)
+ 
+
+ ## Plotting actual tree (takes a while and not particularly useful)
+ # plot(dep16_clust, labels = NULL, hang = 0.1, axes = TRUE, xvar=1:(length(dep16_clust$height)+1), xlim=NULL, ylim=NULL,  x.rev = FALSE, y.rev=FALSE, horiz=FALSE)
+
+ ### 2017 ###
+ hourly_data17 <- data.frame(period.apply(merged17$SC_filled,endpoints(merged17,"hours"),mean))
+ hourly_data17$Q_m3shourly <- period.apply(merged17$Q_m3s,endpoints(merged17,"hours"),mean)
+ hourly_data17$precip_hourlysum <- period.sum(merged17$precip17,endpoints(merged17,"hours"))
+ 
+ hourly_norm<- data.frame(1-(max(hourly_data17$precip_hourlysum)-hourly_data17$precip_hourlysum)/(max(hourly_data17$precip_hourlysum)-min(hourly_data17$precip_hourlysum)))
+ names(hourly_norm)[1] <- "Precip_hr_norm"
+ hourly_norm$SC_hr_norm<- data.frame(1-(max(hourly_data17$SC_filled)-hourly_data17$SC_filled)/(max(hourly_data17$SC_filled)-min(hourly_data17$SC_filled)))
+ hourly_norm$Q_hr_norm<- data.frame(1-(max(hourly_data17$Q_m3shourly)-hourly_data17$Q_m3shourly)/(max(hourly_data17$Q_m3shourly)-min(hourly_data17$Q_m3shourly)))
+ 
+ dep_con17_dist <- dist(hourly_norm, method = "euclidean")
+ dep17_clust <- chclust(dep_con17_dist, method = "coniss")
+ bstick(dep17_clust, ng=20, plot=TRUE)
+ memb<-cutree(dep17_clust,k=7)
+
+ 
+ ggplot(hourly_data17, aes(x=Q_m3shourly , y= SC_filled)) +geom_point(aes(color= factor(memb)))+
+   scale_colour_brewer(palette = "Dark2")+
+   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+   theme_cust()
+ 
+ new_df17 = data.frame(new_df = index(hourly_data17$Q_m3shourly), coredata(hourly_data17$Q_m3shourly))
+ colnames(new_df17) = c("date","Q_m3shourly")
+ new_df$SC_filledhourly <- hourly_data17$SC_filledhourly
+ 
+ ggplot(new_df17, aes(x= date , y= Q_m3shourly)) +geom_point(aes(color= factor(memb)))+
+   #scale_color_discrete(drop=FALSE)+
+   scale_colour_brewer(palette = "Dark2")+
+   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+   xlab(NULL) + 
+   theme_cust()
+
+ for (k  in 1:length(unique(memb))) {
+   temp <- new_df17$date[which(memb==k)]
+   if (k== 1){
+  p_time <- as.POSIXct(tail(temp,n=1)) 
+  } else{
+   p_time [k] <- tail(temp, n=1)}
+ }
+ print(p_time)
+ 
+ 
+ 
