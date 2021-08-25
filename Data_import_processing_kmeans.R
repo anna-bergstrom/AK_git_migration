@@ -22,16 +22,18 @@ full_data17 = read_csv('data/WG_chem_2017.csv') #2017 chemistry - right now this
 full_wx = read_csv('data/wolverine990_15min_LVL2_1619.csv') # loading the 15 min met data from the 990m weather station. Data from Baker et al., 2019 (USGS data publication)  
 full_wx$local_time<- as.POSIXct(full_wx$local_time,TZ = "America/Anchorage", format="%m/%d/%Y %H:%M") #fixing time stamp
 
-# loading Wolverine gauge data from 2016-2019 and fixing time stamps
+# loading Wolverine gauge data from 2016-2020 and fixing time stamps
 gauge_data16 = read_delim('data/wolvQ_16season_m.txt',"\t") 
 gauge_data17 = read_delim('data/wolvQ_17season_m.txt',"\t")
 gauge_data18 = read_csv('data/wolvQ_18season_m.csv')
 gauge_data19 = read_csv('data/wolvQ_19season_m.csv')
+gauge_data20 = read_csv('data/wolvQ_20season_m.csv')
 
 gauge_data16$datetime<- as.POSIXct(gauge_data16$datetime,TZ = "America/Anchorage", format="%m/%d/%Y %H:%M:%S")
 gauge_data17$datetime<- as.POSIXct(gauge_data17$datetime,TZ = "America/Anchorage", format="%m/%d/%Y %H:%M:%S")
 gauge_data18$datetime<- as.POSIXct(gauge_data18$datetime,TZ = "America/Anchorage", format="%m/%d/%Y %H:%M:%S")
 gauge_data19$datetime<- as.POSIXct(gauge_data19$datetime,TZ = "America/Anchorage", format="%m/%d/%Y %H:%M:%S")
+gauge_data20$datetime<- as.POSIXct(gauge_data20$datetime,TZ = "America/Anchorage", format="%m/%d/%Y %H:%M:%S")
 
 ###### Working with the time series data ###############
 # Creating a variable for the manually identified breaks in the 16 and 17 data sets
@@ -43,7 +45,8 @@ breaks17 <- data.frame("datetime" =as.POSIXct(c('05/12/2017 23:45:00','06/22/201
 gauge_data16$Q_m3s <- gauge_data16$Q_cfs * 0.028316847 
 gauge_data17$Q_m3s <- gauge_data17$Q_cfs * 0.028316847 
 gauge_data18$Q_m3s <- gauge_data18$Q * 0.028316847 
-gauge_data19$Q_m3s <- gauge_data19$Q * 0.028316847 
+gauge_data19$Q_m3s <- gauge_data19$Q * 0.028316847
+gauge_data20$Q_m3s <- gauge_data20$Q * 0.028316847
 
 # Adding a column designating the periods in 16 and 17
 gauge_data16$period <-NA
@@ -89,6 +92,7 @@ p17<- ggplot(gauge_data17, aes(x= Q_m3s, y= SC)) +geom_point(aes(col=period), si
 # creating a column counting up 
 gauge_data18$count <- seq(1,length(gauge_data18$SC))
 gauge_data19$count <- seq(1,length(gauge_data19$SC))
+gauge_data20$count <- seq(1,length(gauge_data20$SC))
 
 # 2018 EC-Q plot
 p18<- ggplot(gauge_data18, aes(x= Q_m3s, y= SC)) +geom_point(aes(color= count))+
@@ -106,14 +110,22 @@ p19<- ggplot(gauge_data19, aes(x= Q_m3s, y= SC)) +geom_point(aes(color= count))+
   theme_cust()+
   theme(legend.position=c(0.89,0.6))
 
+# 2020 EC-Q plot
+p20<- ggplot(gauge_data20, aes(x= Q_m3s, y= SC)) +geom_point(aes(color= count))+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")"))) + ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")")))+
+  scale_colour_gradient(low= "green", high="blue" )+
+  scale_x_continuous(expand = c(0, 0), limits = c(0,30)) + scale_y_continuous(expand = c(0, 0), limits = c(0,150))+
+  theme_cust()+
+  theme(legend.position="None")
+
 #putting all plots in a multipanel figure
-figure <- ggarrange(p16, p17, p18,p19,
-                    labels = c("2016", "2017", "2018", "2019"),
-                    ncol = 2, nrow = 2, hjust= -1.6, vjust = 1.8)
+figure <- ggarrange(p16, p17, p18,p19,p20,
+                    labels = c("2016", "2017", "2018", "2019", "2020"),
+                    ncol = 3, nrow = 2, hjust= -1.6, vjust = 1.8)
 figure
 
 
-# Trimming the 2016 and 2017 time series data to the window where we consistently have Q and SC. 
+# Trimming the 2016 and 2017 time series data to the window where we consistently have Q and SC. #2018 and 2019 do not need to be trimmed. 
 bounds16 <- data.frame("datetime" =as.POSIXct(c('04/28/2016 00:00:00','10/06/2016 23:45:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage"))
 bounds17 <- data.frame("datetime" =as.POSIXct(c('04/20/2017 14:00:00','10/17/2017 11:30:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage"))
 gauge_data16<-gauge_data16[ which(gauge_data16$datetime >= bounds16[1,] & gauge_data16$datetime <= bounds16[2,]), ]
@@ -133,6 +145,9 @@ smoothed_18$SC <- rollapply(gauge_data18$SC,swindow,mean, na.rm = TRUE, fill = N
 
 smoothed_19 <- data.frame("Q_m3s" = rollapply(gauge_data19$Q_m3s,swindow,mean, na.rm = TRUE, fill = NA))
 smoothed_19$SC <- rollapply(gauge_data19$SC,swindow,mean, na.rm = TRUE, fill = NA)
+
+smoothed_20 <- data.frame("Q_m3s" = rollapply(gauge_data20$Q_m3s,swindow,mean, na.rm = TRUE, fill = NA))
+smoothed_20$SC <- rollapply(gauge_data20$SC,swindow,mean, na.rm = TRUE, fill = NA)
 
 # Time series plots
 #2016
@@ -159,6 +174,11 @@ ggplot(data = NULL, aes(x = gauge_data19$datetime, y=smoothed_19$Q_m3s)) +geom_l
   xlab(NULL) + ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   theme_cust()
 
+#2020
+ggplot(data = NULL, aes(x = gauge_data20$datetime, y=smoothed_20$Q_m3s)) +geom_line(color = "blue2") +
+  geom_line(aes(x = gauge_data20$datetime, y=smoothed_20$SC/10), color = "darkorchid2") +
+  xlab(NULL) + ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  theme_cust()
 
 # Interpolating to fill NAs 
 gauge_data16$SC_filled<- na_interpolation(gauge_data16$SC, option = "linear", maxgap = Inf)
@@ -171,7 +191,8 @@ gauge_data18$Qm3s_filled<- na_interpolation(gauge_data18$Q_m3s, option = "linear
 
 gauge_data19$SC_filled<- na_interpolation(gauge_data19$SC, option = "linear", maxgap = Inf)
 
-
+gauge_data20$SC_filled<- na_interpolation(gauge_data20$SC, option = "linear", maxgap = Inf)
+gauge_data20$Qm3s_filled<- na_interpolation(gauge_data20$Q_m3s, option = "linear", maxgap = Inf)
 
 ###### Sub-setting weather data ############
 
@@ -192,6 +213,14 @@ merged17$SC_filled<- na_interpolation(merged17$SC_filled, option = "linear", max
 merged17$Q_m3s<- na_interpolation(merged17$Q_m3s, option = "linear", maxgap = Inf)
 
 
+precip18 <- data.frame(full_wx$Precip_Weighing_Incremental[full_wx$local_time >= gauge_data18$datetime[1] & full_wx$local_time <= tail(gauge_data18$datetime,1)])
+precip18$datetime <- full_wx$local_time[full_wx$local_time >= gauge_data18$datetime[1] & full_wx$local_time <= tail(gauge_data18$datetime,1)]
+precip18$temp <- full_wx$site_temp[full_wx$local_time >= gauge_data18$datetime[1] & full_wx$local_time <= tail(gauge_data18$datetime,1)]
+names(precip18)[1] <- "precip18int"
+merged18<- merge.xts(xts(gauge_data18$Q_m3s, as.POSIXct(gauge_data18$datetime)),xts(gauge_data18$SC_filled, as.POSIXct(gauge_data18$datetime)),xts(precip18$precip18int, as.POSIXct(precip18$datetime)),xts(precip18$temp, as.POSIXct(precip18$datetime)),fill=NA)
+names(merged18)<- c("Q_m3s","SC_filled", "precip18", "temp18")   
+merged18$SC_filled<- na_interpolation(merged18$SC_filled, option = "linear", maxgap = Inf)
+merged18$Q_m3s<- na_interpolation(merged18$Q_m3s, option = "linear", maxgap = Inf)
  
  ######### Depth-constrained clustering (to constrain clusters in time)##############
  
@@ -299,7 +328,49 @@ dep_con16_dist <- dist(hourly_norm, method = "euclidean") #distance matrix
  }
  print(p_time)
  
-
+ ### 2018 ###
+ hourly_data18 <- data.frame(period.apply(merged18$SC_filled,endpoints(merged18,"hours"),mean))
+ hourly_data18$Q_m3shourly <- period.apply(merged18$Q_m3s,endpoints(merged18,"hours"),mean)
+ hourly_data18$precip_hourlysum <- period.sum(merged18$precip18,endpoints(merged18,"hours"))
+ 
+ # normalizing hourly data
+ hourly_norm<- data.frame(1-(max(hourly_data18$precip_hourlysum)-hourly_data18$precip_hourlysum)/(max(hourly_data18$precip_hourlysum)-min(hourly_data18$precip_hourlysum)))
+ names(hourly_norm)[1] <- "Precip_hr_norm"
+ hourly_norm$SC_hr_norm<- data.frame(1-(max(hourly_data18$SC_filled)-hourly_data18$SC_filled)/(max(hourly_data18$SC_filled)-min(hourly_data18$SC_filled)))
+ hourly_norm$Q_hr_norm<- data.frame(1-(max(hourly_data18$Q_m3shourly)-hourly_data18$Q_m3shourly)/(max(hourly_data18$Q_m3shourly)-min(hourly_data18$Q_m3shourly)))
+ 
+ # depth constrained clustering 
+ dep_con18_dist <- dist(hourly_norm, method = "euclidean")
+ dep18_clust <- chclust(dep_con18_dist, method = "coniss")
+ bstick(dep18_clust, ng=20, plot=TRUE)
+ memb<-cutree(dep18_clust,k=4)
+ 
+ # plotting clustering results
+ ggplot(hourly_data18, aes(x=Q_m3shourly , y= SC_filled)) +geom_point(aes(color= factor(memb)))+
+   scale_colour_brewer(palette = "Dark2")+
+   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+   theme_cust()
+ 
+ new_df18 = data.frame(new_df = index(hourly_data18$Q_m3shourly), coredata(hourly_data18$Q_m3shourly))
+ colnames(new_df18) = c("date","Q_m3shourly")
+ new_df$SC_filledhourly <- hourly_data18$SC_filledhourly
+ 
+ ggplot(new_df18, aes(x= date , y= Q_m3shourly)) +geom_point(aes(color= factor(memb)))+
+   #scale_color_discrete(drop=FALSE)+
+   scale_colour_brewer(palette = "Dark2")+
+   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+   xlab(NULL) + 
+   theme_cust()
+ 
+ for (k  in 1:length(unique(memb))) {
+   temp <- new_df18$date[which(memb==k)]
+   if (k== 1){
+     p_time <- as.POSIXct(tail(temp,n=1)) 
+   } else{
+     p_time [k] <- tail(temp, n=1)}
+ }
+ print(p_time)
  
 ################################ Extra Code ############################## 
  
