@@ -19,7 +19,7 @@ library(rioja)
 full_data16 = read_csv('data/WG_chemsitry_2016.csv') #2016 chemistry - right now this is not used 
 full_data17 = read_csv('data/WG_chem_2017.csv') #2017 chemistry - right now this is not used 
 
-full_wx = read_csv('data/wolverine990_15min_LVL2_1619.csv') # loading the 15 min met data from the 990m weather station. Data from Baker et al., 2019 (USGS data publication)  
+full_wx = read_csv('data/wolverine990_15min_LVL2_1620.csv') # loading the 15 min met data from the 990m weather station. Data from Baker et al., 2019 (USGS data publication)  
 full_wx$local_time<- as.POSIXct(full_wx$local_time,TZ = "America/Anchorage", format="%m/%d/%Y %H:%M") #fixing time stamp
 
 # loading Wolverine gauge data from 2016-2020 and fixing time stamps
@@ -354,9 +354,9 @@ dep_con16_dist <- dist(hourly_norm, method = "euclidean") #distance matrix
  
  new_df18 = data.frame(new_df = index(hourly_data18$Q_m3shourly), coredata(hourly_data18$Q_m3shourly))
  colnames(new_df18) = c("date","Q_m3shourly")
- new_df$SC_filledhourly <- hourly_data18$SC_filledhourly
+ new_df18$SC_filledhourly <- hourly_data18$SC_filled
  
- ggplot(new_df18, aes(x= date , y= Q_m3shourly)) +geom_point(aes(color= factor(memb)))+
+ ggplot(new_df18, aes(x= date , y= SC_filledhourly)) +geom_point(aes(color= factor(memb)))+
    #scale_color_discrete(drop=FALSE)+
    scale_colour_brewer(palette = "Dark2")+
    ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
