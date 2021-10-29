@@ -125,7 +125,7 @@ full_wx <- read.csv('data/wolverine990_15min_LVL2.csv') %>%
 precip16 <- full_wx %>%
   dplyr::filter(local_time >= bounds16[1],
                 local_time <= bounds16[2]) %>%
-  select(precip_int = Precip_Weighing_Incremental,
+  select(precip_int = TPGIncremental,
          datetime = local_time, 
          temp = site_temp)
 
@@ -133,7 +133,7 @@ precip16 <- full_wx %>%
 precip17 <- full_wx %>%
   dplyr::filter(local_time >= bounds17[1],
                 local_time <= bounds17[2]) %>%
-  select(precip_int = Precip_Weighing_Incremental,
+  select(precip_int = TPGIncremental,
          datetime = local_time, 
          temp = site_temp)
 
@@ -141,25 +141,25 @@ precip17 <- full_wx %>%
 precip18 <- full_wx %>%
   dplyr::filter(local_time >= min(gauge_data18$datetime),
                 local_time <= max(gauge_data18$datetime)) %>%
-  select(precip_int = Precip_Weighing_Incremental,
+  select(precip_int = TPGIncremental,
          datetime = local_time, 
          temp = site_temp)
 
 # 2019 (data only partially available)
-# precip19 <- full_wx %>%
-#   dplyr::filter(local_time >= min(gauge_data19$datetime),
-#                 local_time <= max(gauge_data19$datetime)) %>%
-#   select(precip_int = Precip_Weighing_Incremental,
-#          datetime = local_time, 
-#          temp = site_temp)
+ precip19 <- full_wx %>%
+   dplyr::filter(local_time >= min(gauge_data19$datetime),
+                 local_time <= max(gauge_data19$datetime)) %>%
+   select(precip_int = TPGIncremental,
+          datetime = local_time, 
+          temp = site_temp)
 
 # 2020 (data currently not available)
-# precip20 <- full_wx %>%
-#   dplyr::filter(local_time >= min(gauge_data20$datetime),
-#                 local_time <= max(gauge_data20$datetime)) %>%
-#   select(precip_int = Precip_Weighing_Incremental,
-#          datetime = local_time, 
-#          temp = site_temp)
+ precip20 <- full_wx %>%
+   dplyr::filter(local_time >= min(gauge_data20$datetime),
+                 local_time <= max(gauge_data20$datetime)) %>%
+   select(precip_int = TPGIncremental,
+          datetime = local_time, 
+          temp = site_temp)
 
 ##### Working with the time series data #####
 
@@ -452,7 +452,7 @@ bstick(dep18_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep18_clust,k=5)
+memb <- cutree(dep18_clust,k=4)
 
 # find membership breaks
 memb_break18 <- membership_breaks(memb, hourly18)
@@ -476,134 +476,183 @@ ggplot(hourly18, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
   xlab(NULL) + 
   theme_cust()
 
+
+### 2019
+## prep data
+# merge nwis and met data
+merged19 <- gauge_data19 %>%
+  full_join(.,precip19, by = 'datetime') %>%
+  select(datetime, Q_filled, SC_filled, precip_int, temp)
+merged19$precip_int[is.nan(merged19$precip_int)] <- NA
+merged19$precip_int <- na_interpolation(merged19$precip_int, maxgap = Inf, option = 'linear')
+
+# create hourly ts
+hourly19 <- merged19 %>%
+  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
+  group_by(datetime_hourly) %>% 
+  summarise(SC_mean = mean(SC_filled),
+            Q_mean = mean(Q_filled),
+            precip_sum = sum(precip_int)) %>%
+  na.omit()
+
+# normalize data, convert to xts
+norm19 <- hourly19 %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
+         precip_norm = (1-max(na.omit(precip_sum))-precip_sum)/(max(na.omit(precip_sum))-min(na.omit(precip_sum))),
+         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, precip_norm, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+
+## run depth constrained clusterin
+# distance matrix
+dep_con19_dist <- dist(norm19[,-1], method = "euclidean")
+
+# clustering
+dep19_clust <- chclust(dep_con19_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(dep19_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep19_clust,k=5) 
+
+# define function to find membership breaks
+membership_breaks <- function(memb, hourly){
+  for (k  in 1:length(unique(memb))) {
+    temp <- hourly$datetime_hourly[which(memb==k)]
+    if (k== 1){
+      p_time <- as.POSIXct(tail(temp,n=1)) 
+    } else{
+      p_time [k] <- tail(temp, n=1)}
+  }
+  return(p_time)
+}
+
+# find membership breaks
+memb_break19 <- membership_breaks(memb, hourly19)
+memb_break19
+
+## visualize results
+# c-q plot
+ggplot(hourly19, aes(x=Q_mean , y= SC_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(hourly19, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+### 2020
+## prep data
+# merge nwis and met data
+merged20 <- gauge_data20 %>%
+  full_join(.,precip20, by = 'datetime') %>%
+  select(datetime, Q_filled, SC_filled, precip_int, temp)
+merged20$precip_int[is.nan(merged20$precip_int)] <- NA
+merged20$precip_int <- na_interpolation(merged20$precip_int, maxgap = Inf, option = 'linear')
+
+# create hourly ts
+hourly20 <- merged20 %>%
+  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
+  group_by(datetime_hourly) %>% 
+  summarise(SC_mean = mean(SC_filled),
+            Q_mean = mean(Q_filled),
+            precip_sum = sum(precip_int)) %>%
+  na.omit()
+
+# normalize data, convert to xts
+norm20 <- hourly20 %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
+         precip_norm = (1-max(na.omit(precip_sum))-precip_sum)/(max(na.omit(precip_sum))-min(na.omit(precip_sum))),
+         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, precip_norm, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+
+## run depth constrained clusterin
+# distance matrix
+dep_con20_dist <- dist(norm20[,-1], method = "euclidean")
+
+# clustering
+dep20_clust <- chclust(dep_con20_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(dep20_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep20_clust,k=5) 
+
+# define function to find membership breaks
+membership_breaks <- function(memb, hourly){
+  for (k  in 1:length(unique(memb))) {
+    temp <- hourly$datetime_hourly[which(memb==k)]
+    if (k== 1){
+      p_time <- as.POSIXct(tail(temp,n=1)) 
+    } else{
+      p_time [k] <- tail(temp, n=1)}
+  }
+  return(p_time)
+}
+
+# find membership breaks
+memb_break20 <- membership_breaks(memb, hourly20)
+memb_break20
+
+## visualize results
+# c-q plot
+ggplot(hourly20, aes(x=Q_mean , y= SC_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
 ##### visualize membership breaks #####
 memb_break_df <- tibble('2016' = as.integer(strftime(memb_break16, '%j')),
-       '2017' = as.integer(strftime(memb_break17, '%j')),
-       '2018' = as.integer(strftime(memb_break18, '%j'))) %>%
-        rowid_to_column('break_num') %>%
-      pivot_longer(cols = -break_num, names_to = 'year', values_to = 'doy') %>%
-      mutate(year = year)
+                        '2017' = as.integer(strftime(memb_break17, '%j')),
+                        '2018' = as.integer(strftime(memb_break18, '%j')), 
+                        '2019' = as.integer(strftime(memb_break19, '%j')),
+                        '2020' = as.integer(strftime(memb_break20, '%j')))%>%
+  rowid_to_column('break_num') %>%
+  pivot_longer(cols = -break_num, names_to = 'year', values_to = 'doy') %>%
+  mutate(year = year)
 
 ggplot(memb_break_df, aes(x = doy, y = year, color = as.factor(break_num))) +
   geom_point()
 
 ################################ Extra Code ############################## 
  
- # first, normalizing all the data
- gauge_data16$SC_norm <- 1-(max(gauge_data16$SC_filled)-gauge_data16$SC_filled)/(max(gauge_data16$SC_filled)-min(gauge_data16$SC_filled))
- gauge_data16$Q_norm <- 1-(max(gauge_data16$Q_cfs)-gauge_data16$Q_cfs)/(max(gauge_data16$Q_cfs)-min(gauge_data16$Q_cfs))
- gauge_data16$integer <- seq(from = 1, to= length(gauge_data16$Q_cfs), by=1)
- gauge_data16$int_as_prop <- 1-(max(gauge_data16$integer)-gauge_data16$integer)/(max(gauge_data16$integer)-min(gauge_data16$integer))
- 
- gauge_data17$SC_norm <- 1-(max(gauge_data17$SC_filled)-gauge_data17$SC_filled)/(max(gauge_data17$SC_filled)-min(gauge_data17$SC_filled))
- gauge_data17$Q_norm <- 1-(max(gauge_data17$Q_cfs)-gauge_data17$Q_cfs)/(max(gauge_data17$Q_cfs)-min(gauge_data17$Q_cfs))
- gauge_data17$integer <- seq(from = 1, to= length(gauge_data17$Q_cfs), by=1)
- gauge_data17$int_as_prop <- 1-(max(gauge_data17$integer)-gauge_data17$integer)/(max(gauge_data17$integer)-min(gauge_data17$integer))
- 
- 
- 
- 
- #ggplot(data = NULL, aes(x = gauge_data16$datetime, y=gauge_data16$Q_m3s)) +geom_line(color = "blue2") +
- #  geom_line(aes(x = gauge_data16$datetime, y= filtered$SC_loess/10), color = "darkorchid2") +
- #  xlab(NULL) + ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
- #  theme_cust()
- 
- #normalizing precip data and adding it to the gauge data frame
- is.nan.data.frame <- function(x)
-   do.call(cbind, lapply(x, is.nan))
- precip16[is.nan(precip16)] <- 0
- 
- gauge_data16$Precip_norm <- 1-(max(precip16$precip16int)-precip16$precip16int)/(max(precip16$precip16int)-min(precip16$precip16int))
- 
- 
- # Using smoothing filters 
- 
- # Loess
- 
- # pretty darned righteous. no unwanted bumps. no head/tail anomalies. hard to
- # optimize (lots of parameters), but maybe search can be automated.
- 
- 
- loess_mod <- loess(SC_filled ~ integer, data = gauge_data16, span = 0.02)
- 
- gauge_data16$SC_loess <- predict(loess_mod, newdata = gauge_data16)
- 
- 
- loess_modQ <- loess(Q_m3s ~ integer, data = gauge_data16, span = 0.02)
- 
- gauge_data16$Q_loess <- predict(loess_modQ, newdata = gauge_data16)
- 
- all_xts <- xts(gauge_data16 %>%
-                  select(c('SC_loess', 'SC_filled','Q_m3s','Q_loess')),
-                order.by=gauge_data16$datetime)
- dygraph(all_xts)
- 
- loess_mod17 <- loess(SC_filled ~ integer, data = gauge_data17, span = 0.02)
- 
- gauge_data17$SC_loess <- predict(loess_mod17, newdata = gauge_data17)
- 
- 
- loess_modQ17 <- loess(Q_m3s ~ integer, data = gauge_data17, span = 0.02)
- 
- gauge_data17$Q_loess <- predict(loess_modQ17, newdata = gauge_data17)
- 
- all_xts <- xts(gauge_data17 %>%
-                  select(c('SC_loess', 'SC_filled','Q_m3s','Q_loess')),
-                order.by=gauge_data17$datetime)
- dygraph(all_xts)
- 
- 
- ###### testing k-means #######
- #setting up matrix for cluster analysis
- kmeans16 <- gauge_data16[ ,c("SC_loessnorm", "Q_loessnorm", "int_as_prop","Precip_norm")]
- kmeans17 <- gauge_data17[ ,c("SC_loessnorm", "Q_loessnorm", "int_as_prop")]
- 
- #Determining optimum number of clusters, elbow method - total within sum of square
- fviz_nbclust(kmeans16, kmeans, method = "wss") +
-   geom_vline(xintercept = 4, linetype = 2)
- 
- fviz_nbclust(kmeans17, kmeans, method = "wss") +
-   geom_vline(xintercept = 4, linetype = 2)
- 
- # testing k-means on 2016 - just smoothed data with no
- 
- kmeans16ans <- kmeans(kmeans16,4,nstart=25)
- 
- ggplot(gauge_data16, aes(x= datetime, y= SC_filled)) +geom_point(aes(color= kmeans16ans$cluster))+
-   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")")))+
-   xlab(NULL) + 
-   theme_cust()
- 
- 
- ggplot(gauge_data16, aes(x= Q_m3s, y= SC_filled)) +geom_point(aes(color= kmeans16ans$cluster))+
-   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")")))+
-   xlab(NULL) + 
-   theme_cust()
- 
- # testing k-means on 2017
- kmeans17 <- gauge_data17[ ,c("SC_loessnorm", "Q_loessnorm", "int_as_prop")]
- kmeans17ans <- kmeans(kmeans17,5,nstart=25)
- 
- ggplot(gauge_data17, aes(x= datetime, y= Q_cfs)) +geom_point(aes(color= kmeans17ans$cluster))+
-   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")")))+
-   xlab(NULL) + 
-   theme_cust()
- 
- 
- ggplot(gauge_data17, aes(x= Q_loess, y= SC_loess)) +geom_point(aes(color= kmeans17ans$cluster))+
-   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
-   xlab(NULL) + 
-   theme_cust()
+
  
  ##### Ca time series #########
- ca_slope<- 0.1655
- ca_int <- 1.6576
- 
- hourly_data17$Ca_ts <- (ca_slope* hourly_data17$SC_filled + ca_int) *1000* 86400* hourly_data17$Q_m3shourly /1e6
- 
- ggplot(new_df17, aes(x= date , y= hourly_data17$Ca_ts)) +geom_point(aes(color= factor(memb)))+
-   #scale_color_discrete(drop=FALSE)+
-   scale_colour_brewer(palette = "Dark2")+
-   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
-   xlab(NULL) + 
-   theme_cust()
+ # ca_slope<- 0.1655
+ # ca_int <- 1.6576
+ # 
+ # hourly_data17$Ca_ts <- (ca_slope* hourly_data17$SC_filled + ca_int) *1000* 86400* hourly_data17$Q_m3shourly /1e6
+ # 
+ # ggplot(new_df17, aes(x= date , y= hourly_data17$Ca_ts)) +geom_point(aes(color= factor(memb)))+
+ #   #scale_color_discrete(drop=FALSE)+
+ #   scale_colour_brewer(palette = "Dark2")+
+ #   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+ #   xlab(NULL) + 
+ #   theme_cust()
