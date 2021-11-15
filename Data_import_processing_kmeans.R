@@ -452,7 +452,7 @@ bstick(dep18_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep18_clust,k=4)
+memb <- cutree(dep18_clust,k=5)
 
 # find membership breaks
 memb_break18 <- membership_breaks(memb, hourly18)
@@ -640,6 +640,253 @@ memb_break_df <- tibble('2016' = as.integer(strftime(memb_break16, '%j')),
 ggplot(memb_break_df, aes(x = doy, y = year, color = as.factor(break_num))) +
   geom_point()
 
+########### Pulling in NWIS data from other sites ##############
+##### nwis data #####
+## set nwis details
+site <- '15041200' #Taku R. Nr Juneau
+params <- c('00060', '00095') # discharge and SC
+
+### 2019 ####
+bounds <- as.POSIXct(c('05/06/2019 00:00:00','10/12/2019 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+
+Taku_data19 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                             startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
+         Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
+### 2020 ####
+bounds <- as.POSIXct(c('04/15/2020 00:00:00','11/30/2020 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+
+Taku_data20 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                            startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
+         Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
+### 2021 ####
+bounds <- as.POSIXct(c('04/28/2021 00:00:00','11/30/2021 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+
+Taku_data21 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                            startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
+         Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
+
+ggplot(Taku_data19, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_filled*10), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Taku R. 2019')+
+  theme_cust()
+
+ggplot(Taku_data20, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_filled*10), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Taku R. 2020')+
+  theme_cust()
+
+ggplot(Taku_data21, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_filled*10), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Taku R. 2021')+
+  theme_cust()
+
+############ Stikine ####################
+site <- '15024800' #Stikine R. Nr Wrangell
+params <- c('00060', '00095') # discharge and SC
+
+
+### 2020 ####
+bounds <- as.POSIXct(c('04/15/2020 00:00:00','11/30/2020 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+
+Stikine_data20 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                            startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
+         Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
+ggplot(Stikine_data20, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_filled*10), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Stikine R. 2020')+
+  theme_cust()
+
+############ Unuk ####################
+site <- '15015595' #Unuk R. Bl Blue R. Nr Wrangell
+params <- c('00060', '00095') # discharge and SC
+
+### 2018 ####
+bounds <- as.POSIXct(c('04/15/2018 00:00:00','11/30/2018 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+
+Unuk_data18<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                               startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
+         Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
+ggplot(Unuk_data18, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_filled*10), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Unuk R. 2018')+
+  theme_cust()
+
+### 2021 ####
+bounds <- as.POSIXct(c('04/15/2021 00:00:00','11/30/2021 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+
+Unuk_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                           startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
+         Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
+ggplot(Unuk_data21, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_filled*10), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Unuk R. 2021')+
+  theme_cust()
+
+############ Salmon ####################
+site <- '15008000' #Salmon R. Nr Hyder
+params <- c('00060', '00095') # discharge and SC
+### 2021 ####
+bounds <- as.POSIXct(c('04/15/2020 00:00:00','11/30/2020 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+
+Salmon_data20<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                             startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
+         Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
+ggplot(Salmon_data20, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_filled*10), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Salmon R. 2020')+
+  theme_cust()
+
+
+### 2021 ####
+bounds <- as.POSIXct(c('04/15/2021 00:00:00','11/30/2021 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+
+Salmon_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                           startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
+         Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
+ggplot(Salmon_data21, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_filled), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Salmon R. 2021')+
+  theme_cust()
+
+############ Kennicott ####################
+site <- '15209700' #Kennicott R. at McCarthy
+params <- c('00060', '00095') # discharge and SC
+### 2021 ####
+bounds <- as.POSIXct(c('04/15/2020 00:00:00','11/30/2020 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+
+Kennicott_data20<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                             startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
+         Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
+ggplot(Kennicott_data20, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_filled), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Kennicott R. 2020')+
+  theme_cust()
+
+############## Eran Hood's Data ####################
+CoweeQ18 <- read.csv('data/Cowee 15 minute 2018 cms.csv', header=TRUE, skip=2) %>%
+  rename(Q_m3s = Value)
+
+CoweeQ19 <- read.csv('data/Cowee Cr 15 min discharge cms 2019.csv', header=TRUE, skip=2) %>%
+  rename(Q_m3s = Value)
+
+CoweeEC18 <-read.csv('data/CoweeCr_EC_2018.csv')
+CoweeEC19 <-read.csv('data/CoweeCr_EC_2019.csv')
+
+HerbertQ18 <- read.csv('data/Herber 15 min Q cfs 2018.csv', header=TRUE, skip=2) %>%
+  rename(Q_m3s = Value)
+  HerbertQ18$Q_m3s <- HerbertQ18$Q_m3s/35.315
+
+  HerbertQ19 <- read.csv('data/Herbert 15 min discharge cfs 2019.csv', header=TRUE, skip=2) %>%
+    rename(Q_m3s = Value)
+  HerbertQ19$Q_m3s <- HerbertQ19$Q_m3s/35.315
 ################################ Extra Code ############################## 
  
 
