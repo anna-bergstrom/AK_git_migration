@@ -12,106 +12,112 @@ library(RcppRoll)
 library(factoextra)
 library(rioja)
 library(dataRetrieval)
+library(hydrostats)
 
-# load and configure all data sets 
-#full_data16 <- read.csv('data/WG_chemsitry_2016.csv') #2016 chemistry - right now this is not used 
-#full_data17 <- read.csv('data/WG_chem_2017.csv') #2017 chemistry - right now this is not used 
-
-## set bounds for 2016 and 2017
-bounds16 <- as.POSIXct(c('04/28/2016 00:00:00','10/06/2016 23:45:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
-bounds17 <- as.POSIXct(c('04/20/2017 14:00:00','10/17/2017 11:30:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
-
-##### nwis data #####
-## set nwis details
-site <- '15236900'
-params <- c('00060', '00095')
-
-## set smoothing details 
+########### Setting up details for this script #############
+# set smoothing details 
 swindow <- 192
 
-### loading Wolverine gauge data from 2016-2020
+# generating a custom theme to get rid of the ugly ggplot defaults 
+theme_cust <- function(base_size = 11, base_family = "") {
+  theme_classic() %+replace%
+    theme(
+      panel.border = element_rect(colour = "black", fill = NA, size = 1),
+      axis.text = element_text(color = "black")
+    )
+}
+
+# NWIS data download organization function. 
+data_org <- function(gage_data){
+  gage_data %>%
+  select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
+         Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+}
+
+# Define function to convert time series data to hourly
+hourly<- function(merged){
+  merged %>%
+    mutate(datetime_hourly = cut(datetime, 'hour')) %>%
+    group_by(datetime_hourly) %>% 
+    summarise(SC_mean = mean(SC_filled),
+              Q_mean = mean(Q_filled)) %>%
+    na.omit()
+}
+
+# Define function to normalize ts data and convert to an xts object 
+hourly_norm <- function(hourly_D){
+  hourly_D %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly),   
+       SC_norm = ((SC_mean)-min(na.omit(SC_mean)))/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+       Q_norm = (Q_mean-min(na.omit(Q_mean)))/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+}
+
+# define function to find membership breaks
+membership_breaks <- function(memb, hourly){
+  for (k  in 1:length(unique(memb))) {
+    temp <- hourly$datetime_hourly[which(memb==k)]
+    if (k== 1){
+      p_time <- as.POSIXct(tail(temp,n=1)) 
+    } else{
+      p_time [k] <- tail(temp, n=1)}
+  }
+  return(p_time)
+}
+
+##### nwis data #####
+### loading gauge data
 ### add column of q in cms
 ### add index column
 ### interpolate to fill NAs in '_filled' ts columns
 ### add smoothed data to '_smoothed' ts columns
 ### NOTE: data does not need to be trimmed, just set bounds as start/end in NWIS call
+
+#### Wolverine ########## 
+## set bounds for all years
+bounds16 <- as.POSIXct(c('04/28/2016 00:00:00','10/06/2016 23:45:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+bounds17 <- as.POSIXct(c('04/20/2017 14:00:00','10/17/2017 11:30:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+bounds18 <- as.POSIXct(c('05/22/2018 14:00:00','10/17/2018 11:30:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+bounds19 <- as.POSIXct(c('04/30/2019 14:00:00','10/12/2019 11:30:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+bounds20 <- as.POSIXct(c('04/18/2020 14:00:00','10/18/2020 11:30:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+
+## set nwis details for Wolverine 
+site <- '15236900'
+params <- c('00060', '00095') #discharge and EC respectively 
+
 ## 2016
 gauge_data16 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
-                             startDate = as.Date(bounds16[1]), endDate = as.Date(bounds16[2])) %>%
-   select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
-   mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
-          Q_m3s = Q*0.028316847,
-          period = NA,
-          Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
-          SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
-          Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
-          SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
-   rowid_to_column('count')
-# assign manual breaks
-breaks16 <- c(mdy_hms('05-19-2016 23:45:00', tz = 'America/Anchorage'),
-              mdy_hms('06-13-2016 23:45:00', tz = 'America/Anchorage'),
-              mdy_hms('07-16-2016 23:45:00', tz = 'America/Anchorage'))
-gauge_data16$period[gauge_data16$datetime < breaks16[1]] <- "p1"
-gauge_data16$period[gauge_data16$datetime >= breaks16[1] & gauge_data16$datetime < breaks16[2]] <- "p2"
-gauge_data16$period[gauge_data16$datetime >= breaks16[2] & gauge_data16$datetime < breaks16[3]] <- "p3"
-gauge_data16$period[gauge_data16$datetime >= breaks16[3]] <- "p4"
+                             startDate = as.Date(bounds16[1]), endDate = as.Date(bounds16[2]))
+gauge_data16 <- data_org(gauge_data16)
+
 
 ## 2017 
 gauge_data17 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
-                             startDate = as.Date(bounds17[1]), endDate = as.Date(bounds17[2])) %>%
-   select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
-   mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
-          Q_m3s = Q*0.028316847,
-          period = NA,
-          Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
-          SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
-          Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
-          SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
-   rowid_to_column('count')
-# assign manual breaks
-breaks17 <- c(mdy_hms('05/12/2017 23:45:00', tz = 'America/Anchorage'),
-              mdy_hms('06/22/2017 23:45:00', tz = 'America/Anchorage'),
-              mdy_hms('08/19/2017 23:45:00', tz = 'America/Anchorage'))
-gauge_data17$period[gauge_data17$datetime < breaks17[1]] <- "p1"
-gauge_data17$period[gauge_data17$datetime >= breaks17[1] & gauge_data17$datetime < breaks17[2] ] <- "p2"
-gauge_data17$period[gauge_data17$datetime >= breaks17[2] & gauge_data17$datetime < breaks17[3] ] <- "p3"
-gauge_data17$period[gauge_data17$datetime >= breaks17[3]] <- "p4"
+                             startDate = as.Date(bounds17[1]), endDate = as.Date(bounds17[2])) 
+gauge_data17 <- data_org(gauge_data17)
 
 ## 2018
 gauge_data18 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
-                             startDate = '2018-05-22', endDate = '2018-10-17') %>%
-   select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
-   mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
-          Q_m3s = Q*0.028316847,
-          Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
-          SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
-          Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
-          SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
-   rowid_to_column('count')
+                             startDate = as.Date(bounds18[1]), endDate = as.Date(bounds18[2])) 
+gauge_data18 <- data_org(gauge_data18)
 
 ## 2019
 gauge_data19 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
-                             startDate = '2019-04-30', endDate = '2019-10-12') %>%
-   select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
-   mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
-          Q_m3s = Q*0.028316847,
-          Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
-          SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
-          Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
-          SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
-   rowid_to_column('count')
+                             startDate = as.Date(bounds19[1]), endDate = as.Date(bounds19[2])) 
+gauge_data19 <- data_org(gauge_data19)
 
 ## 2020
 gauge_data20 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using max and min dates from other years for now
-                             startDate = '2020-04-18', endDate = '2020-10-18') %>%
-   select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
-   mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
-         Q_m3s = Q*0.028316847,
-         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
-         SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
-         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
-         SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
-   rowid_to_column('count')
+                             startDate = as.Date(bounds20[1]), endDate =as.Date(bounds20[2])) 
+gauge_data20 <- data_org(gauge_data20)
 
 ##### weather data #####
 ## load in weather data
@@ -145,7 +151,7 @@ precip18 <- full_wx %>%
          datetime = local_time, 
          temp = site_temp)
 
-# 2019 (data only partially available)
+# 2019 
  precip19 <- full_wx %>%
    dplyr::filter(local_time >= min(gauge_data19$datetime),
                  local_time <= max(gauge_data19$datetime)) %>%
@@ -153,7 +159,7 @@ precip18 <- full_wx %>%
           datetime = local_time, 
           temp = site_temp)
 
-# 2020 (data currently not available)
+# 2020 
  precip20 <- full_wx %>%
    dplyr::filter(local_time >= min(gauge_data20$datetime),
                  local_time <= max(gauge_data20$datetime)) %>%
@@ -162,118 +168,9 @@ precip18 <- full_wx %>%
           temp = site_temp)
 
 ##### Working with the time series data #####
-
-### Recreating Figure 2 plots from the geochem paper (in review as of Aug. '21)
-# generating a custom theme to get rid of the ugly ggplot defaults 
-theme_cust <- function(base_size = 11, base_family = "") {
-  theme_classic() %+replace%
-    theme(
-      panel.border = element_rect(colour = "black", fill = NA, size = 1),
-      axis.text = element_text(color = "black")
-    )
-}
-
-# 2016 EC-Q plot
-p16<-ggplot(gauge_data16, aes(x= Q_m3s, y= SC)) +geom_point(aes(col=period), size=2 )+
-  xlab(expression(paste("Q (m"^"3","s"^"-1", ")"))) + ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")")))+
- scale_colour_brewer(palette = "Dark2")+
-  scale_x_continuous(expand = c(0, 0), limits = c(0,30)) + scale_y_continuous(expand = c(0, 0), limits = c(0,150))+
-  theme_cust()+
- theme(legend.position="None")
-p16
-
-# 2017 EC-Q plot
-p17<- ggplot(gauge_data17, aes(x= Q_m3s, y= SC)) +geom_point(aes(col=period), size=2 )+
-  xlab(expression(paste("Q (m"^"3","s"^"-1", ")"))) + ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")")))+
-  scale_colour_brewer(palette = "Dark2")+
-  scale_x_continuous(expand = c(0, 0), limits = c(0,30)) + scale_y_continuous(expand = c(0, 0), limits = c(0,150))+
-  theme_cust()+
-  theme(legend.position= c(0.9,0.6))+
-  theme(legend.title = element_blank())
-p17
-
-# 2018 EC-Q plot
-p18<- ggplot(gauge_data18, aes(x= Q_m3s, y= SC)) +geom_point(aes(color= count))+
-  xlab(expression(paste("Q (m"^"3","s"^"-1", ")"))) + ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")")))+
-  scale_colour_gradient(low= "green", high="blue")+
-  scale_x_continuous(expand = c(0, 0), limits = c(0,30)) + scale_y_continuous(expand = c(0, 0), limits = c(0,150))+
-  theme_cust()+
-  theme(legend.position="None") 
-p18
-
-# 2019 EC-Q plot
-p19<- ggplot(gauge_data19, aes(x= Q_m3s, y= SC)) +geom_point(aes(color= count))+
-  xlab(expression(paste("Q (m"^"3","s"^"-1", ")"))) + ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")")))+
-  scale_colour_gradient( name = NULL, breaks= c(130, 11865),labels=c("May","Sep"),low= "green", high="blue" )+
-  scale_x_continuous(expand = c(0, 0), limits = c(0,30)) + scale_y_continuous(expand = c(0, 0), limits = c(0,150))+
-  theme_cust()+
-  theme(legend.position=c(0.89,0.6))
-p19
-
-# 2020 EC-Q plot
-p20<- ggplot(gauge_data20, aes(x= Q_m3s, y= SC)) +geom_point(aes(color= count))+
-  xlab(expression(paste("Q (m"^"3","s"^"-1", ")"))) + ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")")))+
-  scale_colour_gradient(low= "green", high="blue" )+
-  scale_x_continuous(expand = c(0, 0), limits = c(0,30)) + scale_y_continuous(expand = c(0, 0), limits = c(0,150))+
-  theme_cust()+
-  theme(legend.position="None")
-p20
-
-# putting all plots in a multipanel figure
-figure <- ggarrange(p16, p17, p18,p19,p20,
-                    labels = c("2016", "2017", "2018", "2019", "2020"),
-                    ncol = 3, nrow = 2, hjust= -1.6, vjust = 1.8)
-figure
-
-### Time series plots
-# 2016
-ggplot(gauge_data16, aes(x = datetime, y = Q_smoothed)) + 
-  geom_line(color = "blue2") +
-  geom_line(aes(y = SC_smoothed/10), color = "darkorchid2") +
-  xlab(NULL) + 
-  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
-  labs(title = '2016')+
-  theme_cust()
-
-# 2017
-ggplot(gauge_data17, aes(x = datetime, y = Q_smoothed)) + 
-  geom_line(color = "blue2") +
-  geom_line(aes(y = SC_smoothed/10), color = "darkorchid2") +
-  xlab(NULL) + 
-  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
-  labs(title = '2017')+
-  theme_cust()
-
-# 2018
-ggplot(gauge_data18, aes(x = datetime, y = Q_smoothed)) + 
-  geom_line(color = "blue2") +
-  geom_line(aes(y = SC_smoothed/10), color = "darkorchid2") +
-  xlab(NULL) + 
-  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
-  labs(title = '2018')+
-  theme_cust()
-
-# 2019
-ggplot(gauge_data19, aes(x = datetime, y = Q_smoothed)) + 
-  geom_line(color = "blue2") +
-  geom_line(aes(y = SC_smoothed/10), color = "darkorchid2") +
-  xlab(NULL) + 
-  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
-  labs(title = '2019')+
-  theme_cust()
-
-# 2020
-ggplot(gauge_data20, aes(x = datetime, y = Q_smoothed)) + 
-  geom_line(color = "blue2") +
-  geom_line(aes(y = SC_smoothed/10), color = "darkorchid2") +
-  xlab(NULL) + 
-  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
-  labs(title = '2020')+
-  theme_cust()
  
 ##### Depth-constrained clustering (to constrain clusters in time) #####
-#Tried running it with 15 min data and it was taking too long (may try overnight, but not super practical)
-#So moving to try it with 1-hour intervals - averaging the Q and EC, and summing precip
+# 1-hour intervals - averaging the Q and EC
 
 ### 2016
 ## prep data
@@ -285,24 +182,12 @@ merged16$precip_int[is.nan(merged16$precip_int)] <- NA
 merged16$precip_int <- na_interpolation(merged16$precip_int, maxgap = Inf, option = 'linear')
 
 # create hourly ts
-hourly16 <- merged16 %>%
-  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
-  group_by(datetime_hourly) %>% 
-  summarise(SC_mean = mean(SC_filled),
-            Q_mean = mean(Q_filled),
-            precip_sum = sum(precip_int)) %>%
-  na.omit()
+hourly16 <- hourly(merged16)
 
 # normalize data, convert to xts
-norm16 <- hourly16 %>%
-  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
-         precip_norm = (1-max(na.omit(precip_sum))-precip_sum)/(max(na.omit(precip_sum))-min(na.omit(precip_sum))),
-         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
-         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
-  select(datetime_hourly, precip_norm, SC_norm, Q_norm) %>%
-  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
-
-## run depth constrained clusterin
+norm16 <- hourly_norm(hourly16)
+  
+## run depth constrained clustering
 # distance matrix
 dep_con16_dist <- dist(norm16[,-1], method = "euclidean")
 
@@ -315,18 +200,6 @@ bstick(dep16_clust, ng=20, plot=TRUE)
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
 memb <- cutree(dep16_clust,k=5) 
-
-# define function to find membership breaks
-membership_breaks <- function(memb, hourly){
-  for (k  in 1:length(unique(memb))) {
-    temp <- hourly$datetime_hourly[which(memb==k)]
-    if (k== 1){
-      p_time <- as.POSIXct(tail(temp,n=1)) 
-    } else{
-      p_time [k] <- tail(temp, n=1)}
-  }
-  return(p_time)
-}
 
 # find membership breaks
 memb_break16 <- membership_breaks(memb, hourly16)
@@ -360,22 +233,10 @@ merged17 <- gauge_data17 %>%
   merged17$precip_int <- na_interpolation(merged17$precip_int, maxgap = Inf, option = 'linear')
  
 # create hourly ts
-hourly17 <- merged17 %>%
-  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
-  group_by(datetime_hourly) %>% 
-  summarise(SC_mean = mean(SC_filled),
-             Q_mean = mean(Q_filled),
-             precip_sum = sum(precip_int)) %>%
-   na.omit()
- 
+  hourly17 <- hourly(merged17)
+  
 # normalize data, convert to xts
-norm17 <- hourly17 %>%
-  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
-          precip_norm = (1-max(na.omit(precip_sum))-precip_sum)/(max(na.omit(precip_sum))-min(na.omit(precip_sum))),
-          SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
-          Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
-  select(datetime_hourly, precip_norm, SC_norm, Q_norm) %>%
-  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+  norm17 <- hourly_norm(hourly17)
  
 ## run depth constrained clustering
 # distance matrix
@@ -423,22 +284,10 @@ merged18$precip_int[is.nan(merged18$precip_int)] <- NA
 merged18$precip_int <- na_interpolation(merged18$precip_int, maxgap = Inf, option = 'linear')
 
 # create hourly ts
-hourly18 <- merged18 %>%
-  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
-  group_by(datetime_hourly) %>% 
-  summarise(SC_mean = mean(SC_filled),
-            Q_mean = mean(Q_filled),
-            precip_sum = sum(precip_int)) %>%
-  na.omit()
+hourly18 <- hourly(merged18)
 
 # normalize data, convert to xts
-norm18 <- hourly18 %>%
-  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
-         precip_norm = (1-max(na.omit(precip_sum))-precip_sum)/(max(na.omit(precip_sum))-min(na.omit(precip_sum))),
-         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
-         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
-  select(datetime_hourly, precip_norm, SC_norm, Q_norm) %>%
-  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+norm18 <- hourly_norm(hourly18)
 
 ## run depth constrained clustering
 # distance matrix
@@ -452,7 +301,7 @@ bstick(dep18_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep18_clust,k=5)
+memb <- cutree(dep18_clust,k=4)
 
 # find membership breaks
 memb_break18 <- membership_breaks(memb, hourly18)
@@ -487,22 +336,10 @@ merged19$precip_int[is.nan(merged19$precip_int)] <- NA
 merged19$precip_int <- na_interpolation(merged19$precip_int, maxgap = Inf, option = 'linear')
 
 # create hourly ts
-hourly19 <- merged19 %>%
-  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
-  group_by(datetime_hourly) %>% 
-  summarise(SC_mean = mean(SC_filled),
-            Q_mean = mean(Q_filled),
-            precip_sum = sum(precip_int)) %>%
-  na.omit()
+hourly19 <- hourly(merged19)
 
 # normalize data, convert to xts
-norm19 <- hourly19 %>%
-  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
-         precip_norm = (1-max(na.omit(precip_sum))-precip_sum)/(max(na.omit(precip_sum))-min(na.omit(precip_sum))),
-         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
-         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
-  select(datetime_hourly, precip_norm, SC_norm, Q_norm) %>%
-  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+norm19 <- hourly_norm(hourly19)
 
 ## run depth constrained clusterin
 # distance matrix
@@ -516,19 +353,7 @@ bstick(dep19_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep19_clust,k=5) 
-
-# define function to find membership breaks
-membership_breaks <- function(memb, hourly){
-  for (k  in 1:length(unique(memb))) {
-    temp <- hourly$datetime_hourly[which(memb==k)]
-    if (k== 1){
-      p_time <- as.POSIXct(tail(temp,n=1)) 
-    } else{
-      p_time [k] <- tail(temp, n=1)}
-  }
-  return(p_time)
-}
+memb <- cutree(dep19_clust,k=6) 
 
 # find membership breaks
 memb_break19 <- membership_breaks(memb, hourly19)
@@ -562,22 +387,10 @@ merged20$precip_int[is.nan(merged20$precip_int)] <- NA
 merged20$precip_int <- na_interpolation(merged20$precip_int, maxgap = Inf, option = 'linear')
 
 # create hourly ts
-hourly20 <- merged20 %>%
-  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
-  group_by(datetime_hourly) %>% 
-  summarise(SC_mean = mean(SC_filled),
-            Q_mean = mean(Q_filled),
-            precip_sum = sum(precip_int)) %>%
-  na.omit()
+hourly20 <- hourly(merged20)
 
 # normalize data, convert to xts
-norm20 <- hourly20 %>%
-  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
-         precip_norm = (1-max(na.omit(precip_sum))-precip_sum)/(max(na.omit(precip_sum))-min(na.omit(precip_sum))),
-         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
-         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
-  select(datetime_hourly, precip_norm, SC_norm, Q_norm) %>%
-  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+norm20 <- hourly_norm(hourly20)
 
 ## run depth constrained clusterin
 # distance matrix
@@ -592,18 +405,6 @@ bstick(dep20_clust, ng=20, plot=TRUE)
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
 memb <- cutree(dep20_clust,k=5) 
-
-# define function to find membership breaks
-membership_breaks <- function(memb, hourly){
-  for (k  in 1:length(unique(memb))) {
-    temp <- hourly$datetime_hourly[which(memb==k)]
-    if (k== 1){
-      p_time <- as.POSIXct(tail(temp,n=1)) 
-    } else{
-      p_time [k] <- tail(temp, n=1)}
-  }
-  return(p_time)
-}
 
 # find membership breaks
 memb_break20 <- membership_breaks(memb, hourly20)
@@ -640,57 +441,37 @@ memb_break_df <- tibble('2016' = as.integer(strftime(memb_break16, '%j')),
 ggplot(memb_break_df, aes(x = doy, y = year, color = as.factor(break_num))) +
   geom_point()
 
+
+write.csv(hourly20,"hourly_20.csv", row.names = FALSE)
+
 ########### Pulling in NWIS data from other sites ##############
 ##### nwis data #####
 ## set nwis details
+
+#### Taku #####
 site <- '15041200' #Taku R. Nr Juneau
 params <- c('00060', '00095') # discharge and SC
 
 ### 2019 ####
-bounds <- as.POSIXct(c('05/06/2019 00:00:00','10/12/2019 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+bounds <- as.POSIXct(c('05/06/2019 00:00:00','10/01/2019 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
 
 Taku_data19 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
-                             startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
-  select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
-  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
-         Q_m3s = Q*0.028316847,
-         period = NA,
-         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
-         SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
-         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
-         SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
-  rowid_to_column('count')
+                             startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) 
+Taku_data19 <- data_org(Taku_data19)
 
 ### 2020 ####
-bounds <- as.POSIXct(c('04/15/2020 00:00:00','11/30/2020 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+bounds <- as.POSIXct(c('04/15/2020 00:00:00','10/01/2020 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
 
 Taku_data20 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
-                            startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
-  select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
-  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
-         Q_m3s = Q*0.028316847,
-         period = NA,
-         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
-         SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
-         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
-         SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
-  rowid_to_column('count')
+                            startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) 
+Taku_data20 <- data_org(Taku_data20)
 
 ### 2021 ####
-bounds <- as.POSIXct(c('04/28/2021 00:00:00','11/30/2021 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+bounds <- as.POSIXct(c('04/28/2021 00:00:00','10/01/2021 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
 
 Taku_data21 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
-                            startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
-  select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
-  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
-         Q_m3s = Q*0.028316847,
-         period = NA,
-         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
-         SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
-         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
-         SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
-  rowid_to_column('count')
-
+                            startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) 
+Taku_data21 <- data_org(Taku_data21)
 
 ggplot(Taku_data19, aes(x = datetime, y = Q_m3s)) + 
   geom_line(color = "blue2") +
@@ -716,13 +497,174 @@ ggplot(Taku_data21, aes(x = datetime, y = Q_m3s)) +
   labs(title = 'Taku R. 2021')+
   theme_cust()
 
+### Clustering
+## prep data
+
+# create hourly ts
+T_hourly19 <- hourly(Taku_data19)
+
+# normalize data, convert to xts
+T_norm19 <- hourly_norm(T_hourly19) 
+
+## run depth constrained clusterin
+# distance matrix
+T_dep_con19_dist <- dist(T_norm19[,-1], method = "euclidean")
+
+# clustering
+Tdep19_clust <- chclust(T_dep_con19_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(Tdep19_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(Tdep19_clust,k=6) 
+
+# find membership breaks
+T_memb_break19 <- membership_breaks(memb, T_hourly19)
+T_memb_break19
+
+## visualize results
+# c-q plot
+ggplot(T_hourly19, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(T_hourly19, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+write.csv(T_hourly19,"Taku_hr19.csv", row.names = FALSE)
+
+########## 2020 ############
+## prep data
+# create hourly ts
+T_hourly20 <- Taku_data20 %>%
+  select(datetime, Q_filled, SC_filled) %>%
+  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
+  group_by(datetime_hourly) %>% 
+  summarise(SC_mean = mean(SC_filled),
+            Q_mean = mean(Q_filled)) %>%
+  na.omit()
+
+# normalize data, convert to xts
+T_norm20 <- T_hourly20 %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
+         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+
+## run depth constrained clusterin
+# distance matrix
+T_dep_con20_dist <- dist(T_norm20[,-1], method = "euclidean")
+
+# clustering
+Tdep20_clust <- chclust(T_dep_con20_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(Tdep20_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(Tdep20_clust,k=5) 
+
+# find membership breaks
+T_memb_break20 <- membership_breaks(memb, T_hourly20)
+T_memb_break20
+
+## visualize results
+# c-q plot
+ggplot(T_hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(T_hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+write.csv(T_hourly20,"Taku_hr20.csv", row.names = FALSE)
+
+########## 2021 ############
+## prep data
+# create hourly ts
+T_hourly21 <- Taku_data21 %>%
+  select(datetime, Q_filled, SC_filled) %>%
+  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
+  group_by(datetime_hourly) %>% 
+  summarise(SC_mean = mean(SC_filled),
+            Q_mean = mean(Q_filled)) %>%
+  na.omit()
+
+# normalize data, convert to xts
+T_norm21 <- T_hourly21 %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
+         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+
+## run depth constrained clusterin
+# distance matrix
+T_dep_con21_dist <- dist(T_norm21[,-1], method = "euclidean")
+
+# clustering
+Tdep21_clust <- chclust(T_dep_con21_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(Tdep21_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(Tdep21_clust,k=5) 
+
+# find membership breaks
+T_memb_break21 <- membership_breaks(memb, T_hourly21)
+T_memb_break21
+
+## visualize results
+# c-q plot
+ggplot(T_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(T_hourly21, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+write.csv(T_hourly21,"Taku_hr21.csv", row.names = FALSE)
+
 ############ Stikine ####################
 site <- '15024800' #Stikine R. Nr Wrangell
 params <- c('00060', '00095') # discharge and SC
 
 
 ### 2020 ####
-bounds <- as.POSIXct(c('04/15/2020 00:00:00','11/30/2020 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+bounds <- as.POSIXct(c('04/15/2020 00:00:00','10/01/2020 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
 
 Stikine_data20 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
                             startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
@@ -744,35 +686,69 @@ ggplot(Stikine_data20, aes(x = datetime, y = Q_m3s)) +
   labs(title = 'Stikine R. 2020')+
   theme_cust()
 
+########## 2020 ############
+## prep data
+# create hourly ts
+S_hourly20 <- Stikine_data20 %>%
+  select(datetime, Q_filled, SC_filled) %>%
+  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
+  group_by(datetime_hourly) %>% 
+  summarise(SC_mean = mean(SC_filled),
+            Q_mean = mean(Q_filled)) %>%
+  na.omit()
+
+# normalize data, convert to xts
+S_norm20 <- S_hourly20 %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
+         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+
+## run depth constrained clusterin
+# distance matrix
+S_dep_con20_dist <- dist(S_norm20[,-1], method = "euclidean")
+
+# clustering
+Sdep20_clust <- chclust(S_dep_con20_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(Sdep20_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(Sdep20_clust,k=5) 
+
+# find membership breaks
+S_memb_break20 <- membership_breaks(memb, S_hourly20)
+S_memb_break20
+
+## visualize results
+# c-q plot
+ggplot(S_hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(S_hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+write.csv(S_hourly20,"Stikine_hr20.csv", row.names = FALSE)
+
 ############ Unuk ####################
 site <- '15015595' #Unuk R. Bl Blue R. Nr Wrangell
 params <- c('00060', '00095') # discharge and SC
 
-### 2018 ####
-bounds <- as.POSIXct(c('04/15/2018 00:00:00','11/30/2018 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
-
-Unuk_data18<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
-                               startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
-  select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
-  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
-         Q_m3s = Q*0.028316847,
-         period = NA,
-         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
-         SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
-         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
-         SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
-  rowid_to_column('count')
-
-ggplot(Unuk_data18, aes(x = datetime, y = Q_m3s)) + 
-  geom_line(color = "blue2") +
-  geom_line(aes(y = SC_filled*10), color = "darkorchid2") +
-  xlab(NULL) + 
-  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
-  labs(title = 'Unuk R. 2018')+
-  theme_cust()
-
 ### 2021 ####
-bounds <- as.POSIXct(c('04/15/2021 00:00:00','11/30/2021 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+bounds <- as.POSIXct(c('04/15/2021 00:00:00','10/01/2021 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
 
 Unuk_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
                            startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
@@ -794,11 +770,68 @@ ggplot(Unuk_data21, aes(x = datetime, y = Q_m3s)) +
   labs(title = 'Unuk R. 2021')+
   theme_cust()
 
-############ Salmon ####################
+########## 2021 ############
+## prep data
+# create hourly ts
+hourly20 <- Unuk_data21 %>%
+  select(datetime, Q_filled, SC_filled) %>%
+  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
+  group_by(datetime_hourly) %>% 
+  summarise(SC_mean = mean(SC_filled),
+            Q_mean = mean(Q_filled)) %>%
+  na.omit()
+
+# normalize data, convert to xts
+norm20 <- hourly20 %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
+         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+
+## run depth constrained clusterin
+# distance matrix
+dep_con20_dist <- dist(norm20[,-1], method = "euclidean")
+
+# clustering
+dep20_clust <- chclust(dep_con20_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(dep_con20_dist, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep20_clust,k=5) 
+
+# find membership breaks
+U_memb_break21 <- membership_breaks(memb, hourly20)
+U_memb_break21
+
+## visualize results
+# c-q plot
+ggplot(hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+write.csv(hourly20,"Unuk_hr21.csv", row.names = FALSE)
+
+############ Salmon #################### Too much missing data? Both years
 site <- '15008000' #Salmon R. Nr Hyder
 params <- c('00060', '00095') # discharge and SC
 ### 2021 ####
-bounds <- as.POSIXct(c('04/15/2020 00:00:00','11/30/2020 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+bounds <- as.POSIXct(c('04/15/2020 00:00:00','10/01/2020 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
 
 Salmon_data20<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
                              startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
@@ -820,9 +853,63 @@ ggplot(Salmon_data20, aes(x = datetime, y = Q_m3s)) +
   labs(title = 'Salmon R. 2020')+
   theme_cust()
 
+## prep data
+# create hourly ts
+hourly20 <- Salmon_data20 %>%
+  select(datetime, Q_filled, SC_filled) %>%
+  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
+  group_by(datetime_hourly) %>% 
+  summarise(SC_mean = mean(SC_filled),
+            Q_mean = mean(Q_filled)) %>%
+  na.omit()
+
+# normalize data, convert to xts
+norm20 <- hourly20 %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
+         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+
+## run depth constrained clusterin
+# distance matrix
+dep_con20_dist <- dist(norm20[,-1], method = "euclidean")
+
+# clustering
+dep20_clust <- chclust(dep_con20_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(dep20_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep20_clust,k=5) 
+
+# find membership breaks
+Sal_memb_break20 <- membership_breaks(memb, hourly20)
+
+## visualize results
+# c-q plot
+ggplot(hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+write.csv(hourly20,"Salmon_hr20.csv", row.names = FALSE)
 
 ### 2021 ####
-bounds <- as.POSIXct(c('04/15/2021 00:00:00','11/30/2021 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+bounds <- as.POSIXct(c('05/13/2021 00:00:00','09/18/2021 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
 
 Salmon_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
                            startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
@@ -844,11 +931,67 @@ ggplot(Salmon_data21, aes(x = datetime, y = Q_m3s)) +
   labs(title = 'Salmon R. 2021')+
   theme_cust()
 
+## prep data
+# create hourly ts
+hourly20 <- Salmon_data21 %>%
+  select(datetime, Q_filled, SC_filled) %>%
+  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
+  group_by(datetime_hourly) %>% 
+  summarise(SC_mean = mean(SC_filled),
+            Q_mean = mean(Q_filled)) %>%
+  na.omit()
+
+# normalize data, convert to xts
+norm20 <- hourly20 %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
+         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+
+## run depth constrained clusterin
+# distance matrix
+dep_con20_dist <- dist(norm20[,-1], method = "euclidean")
+
+# clustering
+dep20_clust <- chclust(dep_con20_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(dep20_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep20_clust,k=5) 
+
+# find membership breaks
+Sal_memb_break21 <- membership_breaks(memb, hourly20)
+
+
+## visualize results
+# c-q plot
+ggplot(hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+write.csv(hourly20,"Salmon_hr21.csv", row.names = FALSE)
+
 ############ Kennicott ####################
 site <- '15209700' #Kennicott R. at McCarthy
 params <- c('00060', '00095') # discharge and SC
 ### 2021 ####
-bounds <- as.POSIXct(c('04/15/2020 00:00:00','11/30/2020 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+bounds <- as.POSIXct(c('05/24/2020 00:00:00','09/04/2020 00:00:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
 
 Kennicott_data20<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
                              startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
@@ -870,6 +1013,603 @@ ggplot(Kennicott_data20, aes(x = datetime, y = Q_m3s)) +
   labs(title = 'Kennicott R. 2020')+
   theme_cust()
 
+########## 2020 ############
+## prep data
+# create hourly ts
+K_hourly20 <- Kennicott_data20 %>%
+  select(datetime, Q_filled, SC_filled) %>%
+  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
+  group_by(datetime_hourly) %>% 
+  summarise(SC_mean = mean(SC_filled),
+            Q_mean = mean(Q_filled)) %>%
+  na.omit()
+
+# normalize data, convert to xts
+K_norm20 <- K_hourly20 %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
+         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+
+## run depth constrained clusterin
+# distance matrix
+K_dep_con20_dist <- dist(K_norm20[,-1], method = "euclidean")
+
+# clustering
+Kdep20_clust <- chclust(K_dep_con20_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(Kdep20_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(Kdep20_clust,k=5) 
+
+# find membership breaks
+K_memb_break20 <- membership_breaks(memb, K_hourly20)
+
+## visualize results
+# c-q plot
+ggplot(K_hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(K_hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+write.csv(K_hourly20,"Kennicott_hr20.csv", row.names = FALSE)
+
+############### Hobo Data #########################
+
+# load EC data from Hobo Loggers
+Glacier21 <- read.csv('data/Glacier_C.csv')  
+Glacier21$datetime <- as.POSIXct(Glacier21$datetime, format="%m/%d/%y %H:%M", tz = "America/Anchorage")
+Glacier21$datetime <- as.POSIXct(format(Glacier21$datetime), tz = "America/Anchorage")
+
+site <- '15272502' #Glacier C. at Alyeska 
+params <- '00060' # discharge and SC
+bounds <- as.POSIXct(c(first(Glacier21$datetime),last(Glacier21$datetime)),format="%m/%d/%y %H:%M", TZ = "America/Anchorage")
+
+Glacier_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+        startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+        select(datetime = dateTime, Q = X_00060_00000) %>%
+        mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'))%>%
+  full_join(.,Glacier21, by = 'datetime') %>%
+  select(datetime, Q, Sp_cond, temp)%>%
+         mutate(Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(Sp_cond, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(Sp_cond,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
+ggplot(Glacier_data21, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_smoothed), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Glacier C. 2021')+
+  theme_cust()
+
+## prep data
+# create hourly ts
+hourly20 <- Glacier_data21 %>%
+  select(datetime, Q_filled, SC_filled) %>%
+  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
+  group_by(datetime_hourly) %>% 
+  summarise(SC_mean = mean(SC_filled),
+            Q_mean = mean(Q_filled)) %>%
+  na.omit()
+
+# normalize data, convert to xts
+norm20 <- hourly20 %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
+         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+
+## run depth constrained clusterin
+# distance matrix
+dep_con20_dist <- dist(norm20[,-1], method = "euclidean")
+
+# clustering
+dep20_clust <- chclust(dep_con20_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(dep20_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep20_clust,k=5) 
+
+# find membership breaks
+Gl_memb_break21 <- membership_breaks(memb, hourly20)
+
+
+## visualize results
+# c-q plot
+ggplot(hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+write.csv(hourly20,"Glacier_hr21.csv", row.names = FALSE)
+
+####### Snow R. #########
+Snow21 <- read.csv('data/Snow_R.csv')
+Snow21$datetime <- as.POSIXct(Snow21$datetime, format="%m/%d/%y %H:%M", tz = "America/Anchorage")
+Snow21$datetime <- as.POSIXct(format(Snow21$datetime), tz = "America/Anchorage")
+
+site <- '15243900' #Snow R. nr Seward AK 
+params <- '00060' # discharge and SC
+bounds <- as.POSIXct(c(first(Snow21$datetime),last(Snow21$datetime)),format="%m/%d/%y %H:%M", TZ = "America/Anchorage")
+
+Snow_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                              startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'))%>%
+  full_join(.,Snow21, by = 'datetime') %>%
+  select(datetime, Q, Sp_cond, temp)%>%
+  mutate(Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(Sp_cond, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(Sp_cond,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
+ggplot(Snow_data21, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_smoothed), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Snow R. 2021')+
+  theme_cust()
+
+## prep data
+# create hourly ts
+hourly20 <- Snow_data21 %>%
+  select(datetime, Q_filled, SC_filled) %>%
+  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
+  group_by(datetime_hourly) %>% 
+  summarise(SC_mean = mean(SC_filled),
+            Q_mean = mean(Q_filled)) %>%
+  na.omit()
+
+# normalize data, convert to xts
+norm20 <- hourly20 %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
+         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+
+## run depth constrained clusterin
+# distance matrix
+dep_con20_dist <- dist(norm20[,-1], method = "euclidean")
+
+# clustering
+dep20_clust <- chclust(dep_con20_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(dep20_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep20_clust,k=5) 
+
+# find membership breaks
+Sno_memb_break21 <- membership_breaks(memb, hourly20)
+
+
+## visualize results
+# c-q plot
+ggplot(hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+write.csv(hourly20,"Snow_hr21.csv", row.names = FALSE)
+
+####### Knik R. #########
+knik21 <- read.csv('data/Knick.csv')
+knik21$datetime <- as.POSIXct(knik21$datetime, format="%m/%d/%y %H:%M", tz = "America/Anchorage")
+knik21$datetime <- as.POSIXct(format(knik21$datetime), tz = "America/Anchorage")
+
+site <- '15281000' #Knik R. nr palmer AK 
+params <- '00060' # discharge and SC
+bounds <- as.POSIXct(c(first(Snow21$datetime),last(Snow21$datetime)),format="%m/%d/%y %H:%M", TZ = "America/Anchorage")
+
+Knik_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                           startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'))%>%
+  full_join(.,knik21, by = 'datetime') %>%
+  select(datetime, Q, Sp_cond, temp)%>%
+  mutate(Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(Sp_cond, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(Sp_cond,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
+ggplot(Knik_data21, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_smoothed), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Knik R. 2021')+
+  theme_cust()
+
+## prep data
+# create hourly ts
+hourly20 <- Knik_data21 %>%
+  select(datetime, Q_filled, SC_filled) %>%
+  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
+  group_by(datetime_hourly) %>% 
+  summarise(SC_mean = mean(SC_filled),
+            Q_mean = mean(Q_filled)) %>%
+  na.omit()
+
+# normalize data, convert to xts
+norm20 <- hourly20 %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
+         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+
+## run depth constrained clusterin
+# distance matrix
+dep_con20_dist <- dist(norm20[,-1], method = "euclidean")
+
+# clustering
+dep20_clust <- chclust(dep_con20_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(dep20_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep20_clust,k=5) 
+
+# find membership breaks
+Knk_memb_break21 <- membership_breaks(memb, hourly20)
+
+## visualize results
+# c-q plot
+ggplot(hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+write.csv(hourly20,"Knik_hr21.csv", row.names = FALSE)
+
+####### Kenai R. #########
+Kenai21 <- read.csv('data/Kenai_R.csv')
+Kenai21$datetime <- as.POSIXct(Kenai21$datetime, format="%m/%d/%y %H:%M", tz = "America/Anchorage")
+Kenai21$datetime <- as.POSIXct(format(Kenai21$datetime), tz = "America/Anchorage")
+
+site <- '15258000' #Kenai R. at Cooper Landing AK 
+params <- '00060' # discharge 
+bounds <- as.POSIXct(c(first(Kenai21$datetime),last(Kenai21$datetime)),format="%m/%d/%y %H:%M", TZ = "America/Anchorage")
+
+Kenai_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                           startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'))%>%
+  full_join(.,Kenai21, by = 'datetime') %>%
+  select(datetime, Q, Sp_cond, temp)%>%
+  mutate(Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(Sp_cond, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(Sp_cond,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
+ggplot(Kenai_data21, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_smoothed), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Kenai R. 2021')+
+  theme_cust()
+
+## prep data
+# create hourly ts
+hourly20 <- Kenai_data21 %>%
+  select(datetime, Q_filled, SC_filled) %>%
+  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
+  group_by(datetime_hourly) %>% 
+  summarise(SC_mean = mean(SC_filled),
+            Q_mean = mean(Q_filled)) %>%
+  na.omit()
+
+# normalize data, convert to xts
+norm20 <- hourly20 %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
+         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+
+## run depth constrained clusterin
+# distance matrix
+dep_con20_dist <- dist(norm20[,-1], method = "euclidean")
+
+# clustering
+dep20_clust <- chclust(dep_con20_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(dep20_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep20_clust,k=5) 
+
+# find membership breaks
+Ken_memb_break21 <- membership_breaks(memb, hourly20)
+
+## visualize results
+# c-q plot
+ggplot(hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+write.csv(hourly20,"Kenai_hr21.csv", row.names = FALSE)
+
+####### Sixmile C. #########
+Sixmi21 <- read.csv('data/Sixmile_C.csv')
+Sixmi21$datetime <- as.POSIXct(Sixmi21$datetime, format="%m/%d/%y %H:%M", tz = "America/Anchorage")
+Sixmi21$datetime <- as.POSIXct(format(Sixmi21$datetime), tz = "America/Anchorage")
+
+site <- '15271000' #Sixmile C. nr Hope AK 
+params <- '00060' # discharge 
+bounds <- as.POSIXct(c(first(Sixmi21$datetime),last(Sixmi21$datetime)),format="%m/%d/%y %H:%M", TZ = "America/Anchorage")
+
+Sixmi_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                            startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'))%>%
+  full_join(.,Sixmi21, by = 'datetime') %>%
+  select(datetime, Q, Sp_cond, temp)%>%
+  mutate(Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(Sp_cond, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(Sp_cond,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
+ggplot(Sixmi_data21, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = Sp_cond), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Sixmi C. 2021')+
+  theme_cust()
+
+## prep data
+# create hourly ts
+hourly20 <- Sixmi_data21 %>%
+  select(datetime, Q_filled, SC_filled) %>%
+  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
+  group_by(datetime_hourly) %>% 
+  summarise(SC_mean = mean(SC_filled),
+            Q_mean = mean(Q_filled)) %>%
+  na.omit()
+
+# normalize data, convert to xts
+norm20 <- hourly20 %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
+         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+
+## run depth constrained clusterin
+# distance matrix
+dep_con20_dist <- dist(norm20[,-1], method = "euclidean")
+
+# clustering
+dep20_clust <- chclust(dep_con20_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(dep20_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep20_clust,k=5) 
+
+# find membership breaks
+Sxm_memb_break21 <- membership_breaks(memb, hourly20)
+
+## visualize results
+# c-q plot
+ggplot(hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+write.csv(hourly20,"Sixmi_hr21.csv", row.names = FALSE)
+
+####### Little Susitna C. #########
+LSus21 <- read.csv('data/L_Sus.csv')
+LSus21$datetime <- as.POSIXct(LSus21$datetime, format="%m/%d/%y %H:%M", tz = "America/Anchorage")
+LSus21$datetime <- as.POSIXct(format(LSus21$datetime), tz = "America/Anchorage")
+
+site <- '15271000' #Sixmile C. nr Hope AK 
+params <- '00060' # discharge 
+bounds <- as.POSIXct(c(first(LSus21$datetime),last(LSus21$datetime)),format="%m/%d/%y %H:%M", TZ = "America/Anchorage")
+
+LSus_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                            startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'))%>%
+  full_join(.,LSus21, by = 'datetime') %>%
+  select(datetime, Q, Sp_cond, temp)%>%
+  mutate(Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(Sp_cond, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(Sp_cond,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
+ggplot(LSus_data21, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_smoothed), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Sixmi C. 2021')+
+  theme_cust()
+
+## prep data
+# create hourly ts
+hourly20 <- LSus_data21 %>%
+  select(datetime, Q_filled, SC_filled) %>%
+  mutate(datetime_hourly = cut(datetime, 'hour')) %>% # create hour aggregated datetime
+  group_by(datetime_hourly) %>% 
+  summarise(SC_mean = mean(SC_filled),
+            Q_mean = mean(Q_filled)) %>%
+  na.omit()
+
+# normalize data, convert to xts
+norm20 <- hourly20 %>%
+  mutate(datetime_hourly = ymd_hms(datetime_hourly), 
+         SC_norm = (1-max(na.omit(SC_mean))-SC_mean)/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
+         Q_norm = (1-max(na.omit(Q_mean))-Q_mean)/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
+  select(datetime_hourly, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+
+## run depth constrained clusterin
+# distance matrix
+dep_con20_dist <- dist(norm20[,-1], method = "euclidean")
+
+# clustering
+dep20_clust <- chclust(dep_con20_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstick(dep20_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep20_clust,k=5) 
+
+# find membership breaks
+memb_break20 <- membership_breaks(memb, hourly20)
+memb_break20
+
+## visualize results
+# c-q plot
+ggplot(hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Dark2")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Dark2")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+##### visualize membership breaks #####
+memb_break_df <- tibble('Taku2019' = as.integer(strftime(T_memb_break19, '%j')),
+                        'Taku2020' = as.integer(strftime(T_memb_break20, '%j')),
+                        'Taku2021' = as.integer(strftime(T_memb_break21, '%j')), 
+                        'Stikine2020' = as.integer(strftime(S_memb_break20, '%j')),
+                        'Unuk2021' = as.integer(strftime(U_memb_break21, '%j')),
+                        'Salmon2020' = as.integer(strftime(Sal_memb_break20, '%j')),
+                        'Salmon2021' = as.integer(strftime(Sal_memb_break21, '%j')),
+                        'Kennicott2020' = as.integer(strftime(K_memb_break20, '%j')),
+                        'Glacier2021' = as.integer(strftime(Gl_memb_break21, '%j')),
+                        'Snow2021' = as.integer(strftime(Sno_memb_break21, '%j')),
+                        'Knik2021' = as.integer(strftime(Knk_memb_break21, '%j')),
+                        'Kenai2021' = as.integer(strftime(Ken_memb_break21, '%j')), 
+                        'Sixmile2021' = as.integer(strftime(Sxm_memb_break21, '%j')),)%>%
+  rowid_to_column('break_num') %>%
+  pivot_longer(cols = -break_num, names_to = 'year', values_to = 'doy') %>%
+  mutate(year = year)
+
+ggplot(memb_break_df, aes(x = doy, y = year, color = as.factor(break_num))) +
+  geom_point()
+
+write.csv(memb_break_df,"combinedUSGS_clusters.csv", row.names = FALSE)
 ############## Eran Hood's Data ####################
 CoweeQ18 <- read.csv('data/Cowee 15 minute 2018 cms.csv', header=TRUE, skip=2) %>%
   rename(Q_m3s = Value)
@@ -877,18 +1617,38 @@ CoweeQ18 <- read.csv('data/Cowee 15 minute 2018 cms.csv', header=TRUE, skip=2) %
 CoweeQ19 <- read.csv('data/Cowee Cr 15 min discharge cms 2019.csv', header=TRUE, skip=2) %>%
   rename(Q_m3s = Value)
 
-CoweeEC18 <-read.csv('data/CoweeCr_EC_2018.csv')
-CoweeEC19 <-read.csv('data/CoweeCr_EC_2019.csv')
+CoweeEC18 <-read.csv('data/CoweeCr_EC_2018.csv') %>%
+  rename(datetime = Date) 
+CoweeEC18$datetime = mdy_hms(paste(CoweeEC18$datetime, CoweeEC18$Time))
+CoweeEC18 <- CoweeEC18[-c(2)]
+
+CoweeEC19 <-read.csv('data/CoweeCr_EC_2019.csv') %>%
+  rename(datetime = Date) 
+CoweeEC19$datetime = mdy_hms(paste(CoweeEC19$datetime, CoweeEC19$Time))
+CoweeEC19 <- CoweeEC19[-c(2)]
 
 HerbertQ18 <- read.csv('data/Herber 15 min Q cfs 2018.csv', header=TRUE, skip=2) %>%
-  rename(Q_m3s = Value)
-  HerbertQ18$Q_m3s <- HerbertQ18$Q_m3s/35.315
+rename(Q_m3s = Value)
+HerbertQ18$Q_m3s <- HerbertQ18$Q_m3s/35.315
 
-  HerbertQ19 <- read.csv('data/Herbert 15 min discharge cfs 2019.csv', header=TRUE, skip=2) %>%
-    rename(Q_m3s = Value)
-  HerbertQ19$Q_m3s <- HerbertQ19$Q_m3s/35.315
+HerbertQ19 <- read.csv('data/Herbert 15 min discharge cfs 2019.csv', header=TRUE, skip=2) %>%
+rename(Q_m3s = Value)
+HerbertQ19$Q_m3s <- HerbertQ19$Q_m3s/35.315
+  
+HerbertEC18 <-read.csv('data/HerbertR_EC_2018.csv')%>%
+  rename(datetime = Date) 
+HerbertEC18$datetime = mdy_hms(paste(HerbertEC18$datetime, HerbertEC18$Time))
+HerbertEC18 <- HerbertEC18[-c(2)]
+HerbertEC18$datetime <- round_date(HerbertEC18$datetime, "hour")
+
+HerbertEC19 <-read.csv('data/HerbertR_EC_2019.csv')%>%
+  rename(datetime = Date) 
+HerbertEC19$datetime = mdy_hms(paste(HerbertEC19$datetime, HerbertEC19$Time))
+HerbertEC19 <- HerbertEC19[-c(2)]
+HerbertEC19$datetime <- round_date(HerbertEC19$datetime, "hour")
+  
 ################################ Extra Code ############################## 
- 
+
 
  
  ##### Ca time series #########
