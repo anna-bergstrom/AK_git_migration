@@ -22,6 +22,8 @@ swindow <- 192
 # if this is set as 1, then it will write csvs for all years and all sites, any other number and it won't 
 writecsv <- 0 
 
+b_cutoff <- 0.5
+
 # generating a custom theme to get rid of the ugly ggplot defaults 
 theme_cust <- function(base_size = 11, base_family = "") {
   theme_classic() %+replace%
@@ -48,7 +50,7 @@ data_org <- function(gage_data){
 # Define function to convert time series data to hourly
 hourly<- function(merged){
   merged %>%
-    mutate(datetime_hourly = cut(datetime, 'hour')) %>%
+    mutate(datetime_hourly = cut(datetime, 'day')) %>%
     group_by(datetime_hourly) %>% 
     summarise(SC_mean = mean(SC_filled),
               Q_mean = mean(Q_filled)) %>%
@@ -58,7 +60,7 @@ hourly<- function(merged){
 # Define function to normalize ts data and convert to an xts object 
 hourly_norm <- function(hourly_D){
   hourly_D %>%
-  mutate(datetime_hourly = ymd_hms(datetime_hourly),   
+  mutate(datetime_hourly = ymd(datetime_hourly),   
        SC_norm = ((SC_mean)-min(na.omit(SC_mean)))/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
        Q_norm = (Q_mean-min(na.omit(Q_mean)))/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
   select(datetime_hourly, SC_norm, Q_norm) %>%
@@ -198,11 +200,12 @@ dep_con_dist <- dist(norm16[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
+
 
 # find membership breaks
 memb_break16 <- membership_breaks(memb, hourly16)
@@ -218,7 +221,7 @@ ggplot(hourly16, aes(x=Q_mean , y= SC_mean)) +
   theme_cust()
  
 # q ts
-ggplot(hourly16, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(hourly16, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Dark2")+
@@ -249,11 +252,11 @@ dep_con_dist <- dist(norm17[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
  
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
- 
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
+
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5)
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
 memb_break17 <- membership_breaks(memb, hourly17)
@@ -269,7 +272,7 @@ ggplot(hourly17, aes(x=Q_mean , y= SC_mean)) +
   theme_cust()
  
 # q ts
-ggplot(hourly17, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(hourly17, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Dark2")+
@@ -300,11 +303,11 @@ dep_con_dist <- dist(norm18[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5)
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
 memb_break18 <- membership_breaks(memb, hourly18)
@@ -314,16 +317,16 @@ memb_break18
 # c-q plot
 ggplot(hourly18, aes(x=Q_mean , y= SC_mean)) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(hourly18, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(hourly18, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -352,11 +355,11 @@ dep_con_dist <- dist(norm19[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <- bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,k= min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
 
 # find membership breaks
 memb_break19 <- membership_breaks(memb, hourly19)
@@ -366,16 +369,16 @@ memb_break19
 # c-q plot
 ggplot(hourly19, aes(x=Q_mean , y= SC_mean)) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(hourly19, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(hourly19, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -403,11 +406,11 @@ dep_con_dist <- dist(norm20[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <- bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
 
 # find membership breaks
 memb_break20 <- membership_breaks(memb, hourly20)
@@ -417,32 +420,41 @@ memb_break20
 # c-q plot
 ggplot(hourly20, aes(x=Q_mean , y= SC_mean)) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(hourly20, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
 
 ##### visualize membership breaks #####
-memb_break_df <- tibble('2016' = as.integer(strftime(memb_break16, '%j')),
-                        '2017' = as.integer(strftime(memb_break17, '%j')),
-                        '2018' = as.integer(strftime(memb_break18, '%j')), 
-                        '2019' = as.integer(strftime(memb_break19, '%j')),
-                        '2020' = as.integer(strftime(memb_break20, '%j')))%>%
+max_length <- max(c(length(memb_break16), length(memb_break17), length(memb_break18), length(memb_break19), length(memb_break20)))
+memb_break_df <- data.frame(col1 = c(as.integer(strftime(memb_break16, '%j')),                 # Create data frame with unequal vectors
+                            rep(NA, max_length - length(memb_break16))),
+                   col2 = c(as.integer(strftime(memb_break17, '%j')),
+                            rep(NA, max_length - length(memb_break17))),
+                   col3 = c(as.integer(strftime(memb_break18, '%j')),
+                            rep(NA, max_length - length(memb_break18))),
+                   col4 = c(as.integer(strftime(memb_break19, '%j')),
+                            rep(NA, max_length - length(memb_break19))),
+                   col5 = c(as.integer(strftime(memb_break20, '%j')),
+                            rep(NA, max_length - length(memb_break20))))
+colnames(memb_break_df)<-c(2016,2017,2018,2019,2020)
+# memb_break_df$row_num <- seq.int(nrow(memb_break_df))
+memb_break_df <- tibble(memb_break_df)%>%
   rowid_to_column('break_num') %>%
   pivot_longer(cols = -break_num, names_to = 'year', values_to = 'doy') %>%
   mutate(year = year)
 
 ggplot(memb_break_df, aes(x = doy, y = year, color = as.factor(break_num))) +
-  geom_point()
+ geom_point()
 
 if (writecsv == 1){ 
   write.csv(hourly16,"hourly_16.csv", row.names = FALSE)
@@ -522,11 +534,11 @@ dep_con_dist <- dist(T_norm19[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
 T_memb_break19 <- membership_breaks(memb, T_hourly19)
@@ -536,16 +548,16 @@ T_memb_break19
 # c-q plot
 ggplot(T_hourly19, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(T_hourly19, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(T_hourly19, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -566,11 +578,12 @@ dep_con_dist <- dist(T_norm20[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
+
 
 # find membership breaks
 T_memb_break20 <- membership_breaks(memb, T_hourly20)
@@ -580,16 +593,16 @@ T_memb_break20
 # c-q plot
 ggplot(T_hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(T_hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(T_hourly20, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -612,11 +625,12 @@ dep_con_dist <- dist(T_norm21[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
+
 
 # find membership breaks
 T_memb_break21 <- membership_breaks(memb, T_hourly21)
@@ -626,16 +640,16 @@ T_memb_break21
 # c-q plot
 ggplot(T_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(T_hourly21, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(T_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -682,11 +696,11 @@ dep_con_dist <- dist(S_norm20[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
 S_memb_break20 <- membership_breaks(memb, S_hourly20)
@@ -696,16 +710,16 @@ S_memb_break20
 # c-q plot
 ggplot(S_hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(S_hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(S_hourly20, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -749,11 +763,11 @@ dep_con_dist <- dist(U_norm21[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
 U_memb_break21 <- membership_breaks(memb, U_hourly21)
@@ -763,16 +777,16 @@ U_memb_break21
 # c-q plot
 ggplot(U_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(U_hourly21, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(U_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -814,11 +828,11 @@ dep_con_dist <- dist(Sa_norm20[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
 Sa_memb_break20 <- membership_breaks(memb, Sa_hourly20)
@@ -827,16 +841,16 @@ Sa_memb_break20 <- membership_breaks(memb, Sa_hourly20)
 # c-q plot
 ggplot(Sa_hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(Sa_hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(Sa_hourly20, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -870,10 +884,11 @@ Sa_norm21 <- hourly_norm(Sa_hourly21)
 dep_con_dist <- dist(Sa_norm21[,-1], method = "euclidean")
 
 # clustering
-dep_clust <- chclust(dep_con_dist, method = "coniss")
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
-# broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
@@ -886,16 +901,16 @@ Sa_memb_break21 <- membership_breaks(memb, Sa_hourly21)
 # c-q plot
 ggplot(Sa_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(Sa_hourly21, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(Sa_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -939,11 +954,11 @@ dep_con_dist <- dist(K_norm20[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
 
 # find membership breaks
 K_memb_break20 <- membership_breaks(memb, K_hourly20)
@@ -952,16 +967,16 @@ K_memb_break20 <- membership_breaks(memb, K_hourly20)
 # c-q plot
 ggplot(K_hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(K_hourly20, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(K_hourly20, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -1018,11 +1033,11 @@ dep_con_dist <- dist(Gl_norm21[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
 Gl_memb_break21 <- membership_breaks(memb, Gl_hourly21)
@@ -1032,16 +1047,16 @@ Gl_memb_break21 <- membership_breaks(memb, Gl_hourly21)
 # c-q plot
 ggplot(Gl_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(Gl_hourly21, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(Gl_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -1092,11 +1107,11 @@ dep_con_dist <- dist(Sn_norm21[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
 Sn_memb_break21 <- membership_breaks(memb, Sn_hourly21)
@@ -1105,16 +1120,16 @@ Sn_memb_break21 <- membership_breaks(memb, Sn_hourly21)
 # c-q plot
 ggplot(Sn_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(Sn_hourly21, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(Sn_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -1165,11 +1180,11 @@ dep_con_dist <- dist(Kn_norm21[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
 Kn_memb_break21 <- membership_breaks(memb, kn_hourly21)
@@ -1178,16 +1193,16 @@ Kn_memb_break21 <- membership_breaks(memb, kn_hourly21)
 # c-q plot
 ggplot(kn_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(kn_hourly21, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(kn_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -1239,11 +1254,11 @@ dep_con_dist <- dist(ken_norm21[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,min(subset(bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
 Ken_memb_break21 <- membership_breaks(memb, ken_hourly21)
@@ -1252,16 +1267,16 @@ Ken_memb_break21 <- membership_breaks(memb, ken_hourly21)
 # c-q plot
 ggplot(ken_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(ken_hourly21, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(ken_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -1313,11 +1328,11 @@ dep_con_dist <- dist(sx_norm21[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
 
 # find membership breaks
 Sxm_memb_break21 <- membership_breaks(memb, sx_hourly21)
@@ -1326,16 +1341,16 @@ Sxm_memb_break21 <- membership_breaks(memb, sx_hourly21)
 # c-q plot
 ggplot(sx_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(sx_hourly21, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(sx_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -1387,11 +1402,11 @@ dep_con_dist <- dist(ls_norm21[,-1], method = "euclidean")
 dep_clust <- chclust(dep_con_dist, method = "coniss")
 
 # broken stick plot showing reduction in sse over n of clusters
-bstick(dep_clust, ng=20, plot=TRUE)
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 
 # cut and assign membership
 # set the number of clusters off at 5 and defining the membership of those 5 clusters
-memb <- cutree(dep_clust,k=5) 
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
 
 # find membership breaks
 memb_break20 <- membership_breaks(memb, ls_hourly21)
@@ -1401,16 +1416,16 @@ memb_break20
 # c-q plot
 ggplot(ls_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
-ggplot(ls_hourly21, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
+ggplot(ls_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -1418,24 +1433,44 @@ ggplot(ls_hourly21, aes(x= ymd_hms(datetime_hourly), y= Q_mean)) +
 write.csv(ls_hourly21,"l_sus_hr21.csv", row.names = FALSE)
 
 ##### visualize membership breaks #####
-memb_break_df <- tibble('Taku2019' = as.integer(strftime(T_memb_break19, '%j')),
-                        'Taku2020' = as.integer(strftime(T_memb_break20, '%j')),
-                        'Taku2021' = as.integer(strftime(T_memb_break21, '%j')), 
-                        'Stikine2020' = as.integer(strftime(S_memb_break20, '%j')),
-                        'Unuk2021' = as.integer(strftime(U_memb_break21, '%j')),
-                        'Salmon2020' = as.integer(strftime(Sa_memb_break20, '%j')),
-                        'Salmon2021' = as.integer(strftime(Sa_memb_break21, '%j')),
-                        'Kennicott2020' = as.integer(strftime(K_memb_break20, '%j')),
-                        'Glacier2021' = as.integer(strftime(Gl_memb_break21, '%j')),
-                        'Snow2021' = as.integer(strftime(Sn_memb_break21, '%j')),
-                        'Knik2021' = as.integer(strftime(Kn_memb_break21, '%j')),
-                        'Kenai2021' = as.integer(strftime(Ken_memb_break21, '%j')), 
-                        'Sixmile2021' = as.integer(strftime(Sxm_memb_break21, '%j')),)%>%
+max_length <- max(c(length(T_memb_break19), length(T_memb_break20), length(T_memb_break21), length(S_memb_break20), 
+                    length(U_memb_break21), length(Sa_memb_break20), length(Sa_memb_break21), length(K_memb_break20), 
+                    length(Gl_memb_break21), length(Sn_memb_break21), length(Kn_memb_break21), length(Ken_memb_break21), length(Sxm_memb_break21)))
+
+memb_break_dfall <- data.frame(col1 = c(as.integer(strftime(T_memb_break19, '%j')),                 # Create data frame with unequal vectors
+                                     rep(NA, max_length - length(T_memb_break19))),
+                            col2 = c(as.integer(strftime(T_memb_break20, '%j')),
+                                     rep(NA, max_length - length(T_memb_break20))),
+                            col3 = c(as.integer(strftime(T_memb_break21, '%j')),
+                                     rep(NA, max_length - length(T_memb_break21))),
+                            col4 = c(as.integer(strftime(S_memb_break20, '%j')),
+                                     rep(NA, max_length - length(S_memb_break20))),
+                            col5 = c(as.integer(strftime(U_memb_break21, '%j')),
+                                     rep(NA, max_length - length(U_memb_break21))),
+                            col6 = c(as.integer(strftime(Sa_memb_break20, '%j')),
+                                     rep(NA, max_length - length(Sa_memb_break20))),
+                            col7 = c(as.integer(strftime(Sa_memb_break21, '%j')),
+                                     rep(NA, max_length - length(Sa_memb_break21))),
+                            col8 = c(as.integer(strftime(K_memb_break20, '%j')),
+                                     rep(NA, max_length - length(K_memb_break20))),
+                            col9 = c(as.integer(strftime(Gl_memb_break21, '%j')),
+                                     rep(NA, max_length - length(Gl_memb_break21))),
+                            col10 = c(as.integer(strftime(Sn_memb_break21, '%j')),
+                                     rep(NA, max_length - length(Sn_memb_break21))),
+                            col11 = c(as.integer(strftime(Kn_memb_break21, '%j')),
+                                     rep(NA, max_length - length(Kn_memb_break21))),
+                            col12 = c(as.integer(strftime(Ken_memb_break21, '%j')),
+                                     rep(NA, max_length - length(Ken_memb_break21))),
+                            col13 = c(as.integer(strftime(Sxm_memb_break21, '%j')),
+                                     rep(NA, max_length - length(Sxm_memb_break21))))
+colnames(memb_break_dfall)<-c("Taku19","Taku20","Taku21","Stikine20","Unuk21","Salmon20","Salmon21","Kennicott20","Glacier21","snow21","Knick21", "Kenai21","Sixmile21")
+
+memb_break_dfall <- tibble(memb_break_dfall)%>%
   rowid_to_column('break_num') %>%
   pivot_longer(cols = -break_num, names_to = 'year', values_to = 'doy') %>%
   mutate(year = year)
 
-ggplot(memb_break_df, aes(x = doy, y = year, color = as.factor(break_num))) +
+ggplot(memb_break_dfall, aes(x = doy, y = year, color = as.factor(break_num))) +
   geom_point()
 
 write.csv(memb_break_df,"combinedUSGS_clusters.csv", row.names = FALSE)
