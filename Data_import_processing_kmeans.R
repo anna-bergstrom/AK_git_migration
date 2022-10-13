@@ -13,6 +13,9 @@ library(factoextra)
 library(rioja)
 library(dataRetrieval)
 library(hydrostats)
+library(devtools)
+#devtools::install_github("markwh/streamstats")
+#library(streamstats)
 
 ########### Setting up details for this script #############
 # set smoothing details 
@@ -22,6 +25,8 @@ swindow <- 192
 # if this is set as 1, then it will write csvs for all years and all sites, any other number and it won't 
 writecsv <- 0 
 
+#Cut off to decide how many groups there should be for each year. 
+#It uses the first number of groups that has a difference between the SSE and broken stick model is less than this value
 b_cutoff <- 0.5
 
 # generating a custom theme to get rid of the ugly ggplot defaults 
@@ -33,21 +38,27 @@ theme_cust <- function(base_size = 11, base_family = "") {
     )
 }
 
+#loading a csv that has basin characteristics pulled from the NWIS gage stream stats page (Unuk and Kennicott are missing the full dataset)
+gage_stat <- read.csv("gage_stats.csv") %>%
+  mutate(area_m3 = Area_mi2*2.59e6)
+
 # NWIS data download organization function. 
 data_org <- function(gage_data){
   gage_data %>%
   select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
   mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
          Q_m3s = Q*0.028316847,
+         Q_mm_s = (Q_m3s/gage_stat$area_m3[ gage_stat$Site_id == site])*1000, #normalizing Q by wtrshd area and converting to mm 
          period = NA,
-         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         Q_filled = na_interpolation(Q_mm_s, option = 'linear', maxgap = Inf),
          SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
-         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         Q_smoothed = rollapply(Q_mm_s,swindow,mean, na.rm = TRUE, fill = NA),
          SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
   rowid_to_column('count')
 }
 
-# Define function to convert time series data to hourly
+# Define function to convert time series data to daily 
+# this used to be hourly but was changed to daily so there is a legacy of variable names using hourly
 hourly<- function(merged){
   merged %>%
     mutate(datetime_hourly = cut(datetime, 'day')) %>%
@@ -94,6 +105,8 @@ bounds17 <- as.POSIXct(c('04/20/2017 14:00:00','10/17/2017 11:30:00'), format="%
 bounds18 <- as.POSIXct(c('05/22/2018 14:00:00','10/17/2018 11:30:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
 bounds19 <- as.POSIXct(c('04/30/2019 14:00:00','10/12/2019 11:30:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
 bounds20 <- as.POSIXct(c('04/18/2020 14:00:00','10/18/2020 11:30:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+bounds21 <- as.POSIXct(c('06/04/2021 10:00:00','10/18/2021 11:30:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
+bounds22 <- as.POSIXct(c('05/13/2022 10:00:00','10/11/2022 11:30:00'), format="%m/%d/%Y %H:%M:%S", TZ = "America/Anchorage")
 
 ## set nwis details for Wolverine 
 site <- '15236900'
@@ -123,6 +136,18 @@ gauge_data19 <- data_org(gauge_data19)
 gauge_data20 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using max and min dates from other years for now
                              startDate = as.Date(bounds20[1]), endDate =as.Date(bounds20[2])) 
 gauge_data20 <- data_org(gauge_data20)
+
+## 2021
+gauge_data21 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using max and min dates from other years for now
+                             startDate = as.Date(bounds21[1]), endDate =as.Date(bounds21[2])) 
+gauge_data21 <- data_org(gauge_data21)
+
+## 2021
+gauge_data22 <- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using max and min dates from other years for now
+                             startDate = as.Date(bounds22[1]), endDate =as.Date(bounds22[2])) 
+gauge_data22 <- data_org(gauge_data22)
+
+
 
 ##### weather data #####
 ## load in weather data
@@ -171,6 +196,14 @@ precip18 <- full_wx %>%
    select(precip_int = TPGIncremental,
           datetime = local_time, 
           temp = site_temp)
+ 
+ # 2021 
+ precip21 <- full_wx %>%
+   dplyr::filter(local_time >= min(gauge_data21$datetime),
+                 local_time <= max(gauge_data21$datetime)) %>%
+   select(precip_int = TPGIncremental,
+          datetime = local_time, 
+          temp = site_temp)
 
 ##### Working with the time series data #####
  
@@ -215,7 +248,7 @@ memb_break16
 # c-q plot
 ggplot(hourly16, aes(x=Q_mean , y= SC_mean)) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
@@ -224,7 +257,7 @@ ggplot(hourly16, aes(x=Q_mean , y= SC_mean)) +
 ggplot(hourly16, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
@@ -266,7 +299,7 @@ memb_break17
 # c-q plot
 ggplot(hourly17, aes(x=Q_mean , y= SC_mean)) +
   geom_point(aes(color= factor(memb)))+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
@@ -275,8 +308,16 @@ ggplot(hourly17, aes(x=Q_mean , y= SC_mean)) +
 ggplot(hourly17, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
-  scale_colour_brewer(palette = "Dark2")+
+  scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+ggplot(hourly17, aes(x= ymd(datetime_hourly), y= SC_mean/Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Paired")+
+  ylab(expression(paste("EC/Q")))+
   xlab(NULL) + 
   theme_cust()
 
@@ -331,6 +372,14 @@ ggplot(hourly18, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   xlab(NULL) + 
   theme_cust()
 
+ggplot(hourly18, aes(x= ymd(datetime_hourly), y= SC_mean/Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Paired")+
+  ylab(expression(paste("EC/Q")))+
+  xlab(NULL) + 
+  theme_cust()
+
 
 ### 2019
 ## prep data
@@ -367,11 +416,11 @@ memb_break19
 
 ## visualize results
 # c-q plot
-ggplot(hourly19, aes(x=Q_mean , y= SC_mean)) +
+ggplot(hourly19, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
-  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
-  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  xlab(expression(paste("ln Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("ln EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
 
 # q ts
@@ -380,6 +429,14 @@ ggplot(hourly19, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+ggplot(hourly19, aes(x= ymd(datetime_hourly), y= SC_mean/Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Paired")+
+  ylab(expression(paste("EC/Q")))+
   xlab(NULL) + 
   theme_cust()
 
@@ -434,8 +491,121 @@ ggplot(hourly20, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   xlab(NULL) + 
   theme_cust()
 
+ggplot(hourly20, aes(x= ymd(datetime_hourly), y= SC_mean/Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Paired")+
+  ylab(expression(paste("EC/Q")))+
+  xlab(NULL) + 
+  theme_cust()
+
+### 2021
+## prep data
+# merge nwis and met data
+merged21 <- gauge_data21 %>%
+  full_join(.,precip21, by = 'datetime') %>%
+  select(datetime, Q_filled, SC_filled, precip_int, temp)
+merged21$precip_int[is.nan(merged21$precip_int)] <- NA
+#merged21$precip_int <- na_interpolation(merged21$precip_int, maxgap = Inf, option = 'linear')
+
+# create hourly ts
+hourly21 <- hourly(merged21)
+
+# normalize data, convert to xts
+norm21 <- hourly_norm(hourly21)
+
+## run depth constrained clustering
+# distance matrix
+dep_con_dist <- dist(norm21[,-1], method = "euclidean")
+
+# clustering
+dep_clust <- chclust(dep_con_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstk <- bstick(dep_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+#memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
+memb <- cutree(dep_clust,5) 
+
+# find membership breaks
+memb_break21 <- membership_breaks(memb, hourly21)
+memb_break21
+
+## visualize results
+# c-q plot
+ggplot(hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Paired")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Paired")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+### 2022
+## prep data
+# merge nwis and met data
+merged22 <- gauge_data22 %>%
+  full_join(.,precip21, by = 'datetime') %>%
+  select(datetime, Q_filled, SC_filled, precip_int, temp)
+merged21$precip_int[is.nan(merged21$precip_int)] <- NA
+#merged21$precip_int <- na_interpolation(merged21$precip_int, maxgap = Inf, option = 'linear')
+
+# create hourly ts
+hourly22 <- hourly(merged22)
+
+# normalize data, convert to xts
+norm22 <- hourly_norm(hourly22)
+
+## run depth constrained clustering
+# distance matrix
+dep_con_dist <- dist(norm22[,-1], method = "euclidean")
+
+# clustering
+dep_clust <- chclust(dep_con_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstk <- bstick(dep_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+#memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
+memb <- cutree(dep_clust,5) 
+
+# find membership breaks
+memb_break22 <- membership_breaks(memb, hourly22)
+memb_break22
+
+## visualize results
+# c-q plot
+ggplot(hourly22, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Paired")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(hourly22, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Paired")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+
 ##### visualize membership breaks #####
-max_length <- max(c(length(memb_break16), length(memb_break17), length(memb_break18), length(memb_break19), length(memb_break20)))
+max_length <- max(c(length(memb_break16), length(memb_break17), length(memb_break18), length(memb_break19), length(memb_break20), length(memb_break21)))
 memb_break_df <- data.frame(col1 = c(as.integer(strftime(memb_break16, '%j')),                 # Create data frame with unequal vectors
                             rep(NA, max_length - length(memb_break16))),
                    col2 = c(as.integer(strftime(memb_break17, '%j')),
@@ -445,8 +615,10 @@ memb_break_df <- data.frame(col1 = c(as.integer(strftime(memb_break16, '%j')),  
                    col4 = c(as.integer(strftime(memb_break19, '%j')),
                             rep(NA, max_length - length(memb_break19))),
                    col5 = c(as.integer(strftime(memb_break20, '%j')),
-                            rep(NA, max_length - length(memb_break20))))
-colnames(memb_break_df)<-c(2016,2017,2018,2019,2020)
+                            rep(NA, max_length - length(memb_break20))),
+                   col6 = c(as.integer(strftime(memb_break21, '%j')),
+                            rep(NA, max_length - length(memb_break21))))
+colnames(memb_break_df)<-c(2016,2017,2018,2019,2020,2021)
 # memb_break_df$row_num <- seq.int(nrow(memb_break_df))
 memb_break_df <- tibble(memb_break_df)%>%
   rowid_to_column('break_num') %>%
@@ -462,6 +634,7 @@ if (writecsv == 1){
   write.csv(hourly18,"hourly_18.csv", row.names = FALSE)
   write.csv(hourly19,"hourly_19.csv", row.names = FALSE)
   write.csv(hourly20,"hourly_20.csv", row.names = FALSE)
+  write.csv(hourly21,"hourly_21.csv", row.names = FALSE)
 }
 
 ########### Pulling in NWIS data from other sites ##############
