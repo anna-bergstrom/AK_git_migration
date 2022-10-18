@@ -23,7 +23,7 @@ swindow <- 192
 
 # option to write hourly data as .csv
 # if this is set as 1, then it will write csvs for all years and all sites, any other number and it won't 
-writecsv <- 0 
+writecsv <- 1 
 
 #Cut off to decide how many groups there should be for each year. 
 #It uses the first number of groups that has a difference between the SSE and broken stick model is less than this value
@@ -634,7 +634,8 @@ if (writecsv == 1){
   write.csv(hourly18,"hourly_18.csv", row.names = FALSE)
   write.csv(hourly19,"hourly_19.csv", row.names = FALSE)
   write.csv(hourly20,"hourly_20.csv", row.names = FALSE)
-  write.csv(hourly21,"hourly_21.csv", row.names = FALSE)
+  write.csv(hourly21,"merged_21.csv", row.names = FALSE)
+  write.csv(hourly22,"merged_22.csv", row.names = FALSE)
 }
 
 ########### Pulling in NWIS data from other sites ##############
@@ -1160,13 +1161,19 @@ if (writecsv == 1){
 
 ############### Hobo Data #########################
 
+site <- '15272502' #Glacier C. at Alyeska 
+params <- '00060' # discharge 
+
 # load EC data from Hobo Loggers
 Glacier21 <- read.csv('data/Glacier_C.csv')  
 Glacier21$datetime <- as.POSIXct(Glacier21$datetime, format="%m/%d/%y %H:%M", tz = "America/Anchorage")
 Glacier21$datetime <- as.POSIXct(format(Glacier21$datetime), tz = "America/Anchorage")
 
-site <- '15272502' #Glacier C. at Alyeska 
-params <- '00060' # discharge 
+Glacier22 <- read.csv('data/Glacier_C22.csv')  
+Glacier22$datetime <- as.POSIXct(Glacier22$datetime, format="%m/%d/%y %H:%M", tz = "America/Anchorage")
+Glacier22$datetime <- as.POSIXct(format(Glacier22$datetime), tz = "America/Anchorage")
+
+
 bounds <- as.POSIXct(c(first(Glacier21$datetime),last(Glacier21$datetime)),format="%m/%d/%y %H:%M", TZ = "America/Anchorage")
 
 Glacier_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params, 
@@ -1183,12 +1190,36 @@ Glacier_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params
          SC_smoothed = rollapply(Sp_cond,swindow,mean, na.rm = TRUE, fill = NA)) %>%
   rowid_to_column('count')
 
+bounds <- as.POSIXct(c(first(Glacier22$datetime),last(Glacier22$datetime)),format="%m/%d/%y %H:%M", TZ = "America/Anchorage")
+
+Glacier_data22<- readNWISdata(sites = site, service = 'iv', parameterCd = params, 
+                              startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'))%>%
+  full_join(.,Glacier22, by = 'datetime') %>%
+  select(datetime, Q, Sp_cond, temp)%>%
+  mutate(Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(Sp_cond, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(Sp_cond,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
 ggplot(Glacier_data21, aes(x = datetime, y = Q_m3s)) + 
   geom_line(color = "blue2") +
   geom_line(aes(y = SC_smoothed), color = "darkorchid2") +
   xlab(NULL) + 
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   labs(title = 'Glacier C. 2021')+
+  theme_cust()
+
+ggplot(Glacier_data22, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_smoothed), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Glacier C. 2022')+
   theme_cust()
 
 ## prep data
@@ -1233,14 +1264,62 @@ ggplot(Gl_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
+### 2022 #####3
+## prep data
+# create hourly ts
+Gl_hourly22 <- hourly(Glacier_data22) 
+
+# normalize data, convert to xts
+Gl_norm22 <- hourly_norm(Gl_hourly22) 
+
+## run depth constrained clusterin
+# distance matrix
+dep_con_dist <- dist(Gl_norm22[,-1], method = "euclidean")
+
+# clustering
+dep_clust <- chclust(dep_con_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
+
+# find membership breaks
+Gl_memb_break22 <- membership_breaks(memb, Gl_hourly22)
+
+
+## visualize results
+# c-q plot
+ggplot(Gl_hourly22, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Paired")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(Gl_hourly22, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Paired")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
 
 ####### Snow R. #########
+site <- '15243900' #Snow R. nr Seward AK 
+params <- '00060' # discharge 
+
 Snow21 <- read.csv('data/Snow_R.csv')
 Snow21$datetime <- as.POSIXct(Snow21$datetime, format="%m/%d/%y %H:%M", tz = "America/Anchorage")
 Snow21$datetime <- as.POSIXct(format(Snow21$datetime), tz = "America/Anchorage")
 
-site <- '15243900' #Snow R. nr Seward AK 
-params <- '00060' # discharge 
+Snow22 <- read.csv('data/Snow_R22.csv')
+Snow22$datetime <- as.POSIXct(Snow22$datetime, format="%m/%d/%y %H:%M", tz = "America/Anchorage")
+Snow22$datetime <- as.POSIXct(format(Snow22$datetime), tz = "America/Anchorage")
+
 bounds <- as.POSIXct(c(first(Snow21$datetime),last(Snow21$datetime)),format="%m/%d/%y %H:%M", TZ = "America/Anchorage")
 
 Snow_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params,
@@ -1257,6 +1336,22 @@ Snow_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params,
          SC_smoothed = rollapply(Sp_cond,swindow,mean, na.rm = TRUE, fill = NA)) %>%
   rowid_to_column('count')
 
+bounds <- as.POSIXct(c(first(Snow22$datetime),last(Snow22$datetime)),format="%m/%d/%y %H:%M", TZ = "America/Anchorage")
+
+Snow_data22<- readNWISdata(sites = site, service = 'iv', parameterCd = params,
+                           startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'))%>%
+  full_join(.,Snow22, by = 'datetime') %>%
+  select(datetime, Q, Sp_cond, temp)%>%
+  mutate(Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(Sp_cond, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(Sp_cond,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
 ggplot(Snow_data21, aes(x = datetime, y = Q_m3s)) + 
   geom_line(color = "blue2") +
   geom_line(aes(y = SC_smoothed), color = "darkorchid2") +
@@ -1264,6 +1359,15 @@ ggplot(Snow_data21, aes(x = datetime, y = Q_m3s)) +
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   labs(title = 'Snow R. 2021')+
   theme_cust()
+
+ggplot(Snow_data22, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_smoothed), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Snow R. 2022')+
+  theme_cust()
+
 
 ## prep data
 # create hourly ts
@@ -1300,6 +1404,48 @@ ggplot(Sn_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
 
 # q ts
 ggplot(Sn_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Paired")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
+## prep data
+# create hourly ts
+Sn_hourly22 <- hourly(Snow_data22)
+
+# normalize data, convert to xts
+Sn_norm22 <- hourly_norm(Sn_hourly22) 
+
+## run depth constrained clusterin
+# distance matrix
+dep_con_dist <- dist(Sn_norm22[,-1], method = "euclidean")
+
+# clustering
+dep_clust <- chclust(dep_con_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
+
+# find membership breaks
+Sn_memb_break22 <- membership_breaks(memb, Sn_hourly22)
+
+## visualize results
+# c-q plot
+ggplot(Sn_hourly22, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Paired")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(Sn_hourly22, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -1456,12 +1602,17 @@ ggplot(ken_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
 
 
 ####### Sixmile C. #########
+site <- '15271000' #Sixmile C. nr Hope AK 
+params <- '00060' # discharge 
+
 Sixmi21 <- read.csv('data/Sixmile_C.csv')
 Sixmi21$datetime <- as.POSIXct(Sixmi21$datetime, format="%m/%d/%y %H:%M", tz = "America/Anchorage")
 Sixmi21$datetime <- as.POSIXct(format(Sixmi21$datetime), tz = "America/Anchorage")
 
-site <- '15271000' #Sixmile C. nr Hope AK 
-params <- '00060' # discharge 
+Sixmi22 <- read.csv('data/Sixmile_C22.csv')
+Sixmi22$datetime <- as.POSIXct(Sixmi22$datetime, format="%m/%d/%y %H:%M", tz = "America/Anchorage")
+Sixmi22$datetime <- as.POSIXct(format(Sixmi22$datetime), tz = "America/Anchorage")
+
 bounds <- as.POSIXct(c(first(Sixmi21$datetime),last(Sixmi21$datetime)),format="%m/%d/%y %H:%M", TZ = "America/Anchorage")
 
 Sixmi_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
@@ -1478,12 +1629,36 @@ Sixmi_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params, 
          SC_smoothed = rollapply(Sp_cond,swindow,mean, na.rm = TRUE, fill = NA)) %>%
   rowid_to_column('count')
 
+bounds <- as.POSIXct(c(first(Sixmi22$datetime),last(Sixmi22$datetime)),format="%m/%d/%y %H:%M", TZ = "America/Anchorage")
+
+Sixmi_data22<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                            startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'))%>%
+  full_join(.,Sixmi22, by = 'datetime') %>%
+  select(datetime, Q, Sp_cond, temp)%>%
+  mutate(Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(Sp_cond, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(Sp_cond,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
 ggplot(Sixmi_data21, aes(x = datetime, y = Q_m3s)) + 
   geom_line(color = "blue2") +
   geom_line(aes(y = Sp_cond), color = "darkorchid2") +
   xlab(NULL) + 
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   labs(title = 'Sixmi C. 2021')+
+  theme_cust()
+
+ggplot(Sixmi_data22, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = Sp_cond), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Sixmi C. 2022')+
   theme_cust()
 
 ## prep data
@@ -1528,14 +1703,62 @@ ggplot(sx_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   xlab(NULL) + 
   theme_cust()
 
+## prep data
+# create hourly ts
+sx_hourly22 <- hourly(Sixmi_data22)
+
+# normalize data, convert to xts
+sx_norm22 <- hourly_norm(sx_hourly22) 
+
+## run depth constrained clusterin
+# distance matrix
+dep_con_dist <- dist(sx_norm22[,-1], method = "euclidean")
+
+# clustering
+dep_clust <- chclust(dep_con_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
+
+# find membership breaks
+Sxm_memb_break22 <- membership_breaks(memb, sx_hourly22)
+
+## visualize results
+# c-q plot
+ggplot(sx_hourly22, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Paired")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(sx_hourly22, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Paired")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
 
 ####### Little Susitna C. #########
+
+site <- '15290000' #L Susitna R. nr Palmer AK 
+params <- '00060' # discharge 
+
 LSus21 <- read.csv('data/L_Sus.csv')
 LSus21$datetime <- as.POSIXct(LSus21$datetime, format="%m/%d/%y %H:%M", tz = "America/Anchorage")
 LSus21$datetime <- as.POSIXct(format(LSus21$datetime), tz = "America/Anchorage")
 
-site <- '15271000' #Sixmile C. nr Hope AK 
-params <- '00060' # discharge 
+LSus22 <- read.csv('data/L_Sus22.csv')
+LSus22$datetime <- as.POSIXct(LSus22$datetime, format="%m/%d/%y %H:%M", tz = "America/Anchorage")
+LSus22$datetime <- as.POSIXct(format(LSus22$datetime), tz = "America/Anchorage")
+
 bounds <- as.POSIXct(c(first(LSus21$datetime),last(LSus21$datetime)),format="%m/%d/%y %H:%M", TZ = "America/Anchorage")
 
 LSus_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
@@ -1552,12 +1775,36 @@ LSus_data21<- readNWISdata(sites = site, service = 'iv', parameterCd = params, #
          SC_smoothed = rollapply(Sp_cond,swindow,mean, na.rm = TRUE, fill = NA)) %>%
   rowid_to_column('count')
 
+bounds <- as.POSIXct(c(first(LSus22$datetime),last(LSus22$datetime)),format="%m/%d/%y %H:%M", TZ = "America/Anchorage")
+
+LSus_data22<- readNWISdata(sites = site, service = 'iv', parameterCd = params, # using start/end date from original for now
+                           startDate = as.Date(bounds[1]), endDate = as.Date(bounds[2])) %>%
+  select(datetime = dateTime, Q = X_00060_00000) %>%
+  mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'))%>%
+  full_join(.,LSus22, by = 'datetime') %>%
+  select(datetime, Q, Sp_cond, temp)%>%
+  mutate(Q_m3s = Q*0.028316847,
+         period = NA,
+         Q_filled = na_interpolation(Q_m3s, option = 'linear', maxgap = Inf),
+         SC_filled = na_interpolation(Sp_cond, option = 'linear', maxgap = Inf),
+         Q_smoothed = rollapply(Q_m3s,swindow,mean, na.rm = TRUE, fill = NA),
+         SC_smoothed = rollapply(Sp_cond,swindow,mean, na.rm = TRUE, fill = NA)) %>%
+  rowid_to_column('count')
+
 ggplot(LSus_data21, aes(x = datetime, y = Q_m3s)) + 
   geom_line(color = "blue2") +
   geom_line(aes(y = SC_smoothed), color = "darkorchid2") +
   xlab(NULL) + 
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
-  labs(title = 'Sixmi C. 2021')+
+  labs(title = 'Little Susitna. 2021')+
+  theme_cust()
+
+ggplot(LSus_data22, aes(x = datetime, y = Q_m3s)) + 
+  geom_line(color = "blue2") +
+  geom_line(aes(y = SC_smoothed), color = "darkorchid2") +
+  xlab(NULL) + 
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  labs(title = 'Little Susitna. 2022')+
   theme_cust()
 
 ## prep data
@@ -1582,8 +1829,8 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
 
 # find membership breaks
-memb_break20 <- membership_breaks(memb, ls_hourly21)
-memb_break20
+LSmemb_break21 <- membership_breaks(memb, ls_hourly21)
+
 
 ## visualize results
 # c-q plot
@@ -1602,6 +1849,50 @@ ggplot(ls_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
   xlab(NULL) + 
   theme_cust()
+
+## prep data
+# create hourly ts
+ls_hourly22 <- hourly(LSus_data22)
+
+# normalize data, convert to xts
+ls_norm22 <- hourly_norm(ls_hourly22)
+
+## run depth constrained clusterin
+# distance matrix
+dep_con_dist <- dist(ls_norm22[,-1], method = "euclidean")
+
+# clustering
+dep_clust <- chclust(dep_con_dist, method = "coniss")
+
+# broken stick plot showing reduction in sse over n of clusters
+bstk <-bstick(dep_clust, ng=20, plot=TRUE)
+
+# cut and assign membership
+# set the number of clusters off at 5 and defining the membership of those 5 clusters
+memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
+
+# find membership breaks
+LSmemb_break21 <- membership_breaks(memb, ls_hourly22)
+
+
+## visualize results
+# c-q plot
+ggplot(ls_hourly22, aes(x=log(Q_mean) , y= log(SC_mean))) +
+  geom_point(aes(color= factor(memb)))+
+  scale_colour_brewer(palette = "Paired")+
+  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
+  theme_cust()
+
+# q ts
+ggplot(ls_hourly22, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+  geom_point(aes(color= factor(memb)))+
+  #scale_color_discrete(drop=FALSE)+
+  scale_colour_brewer(palette = "Paired")+
+  ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(NULL) + 
+  theme_cust()
+
 
 write.csv(ls_hourly21,"l_sus_hr21.csv", row.names = FALSE)
 
