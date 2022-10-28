@@ -21,13 +21,17 @@ library(devtools)
 # set smoothing details 
 swindow <- 192
 
-# option to write hourly data as .csv
+# option to write daily data as .csv
 # if this is set as 1, then it will write csvs for all years and all sites, any other number and it won't 
 writecsv <- 1 
 
 #Cut off to decide how many groups there should be for each year. 
 #It uses the first number of groups that has a difference between the SSE and broken stick model is less than this value
 b_cutoff <- 0.5
+
+#Option to decide if you want to use baseflow or total Q in cluster analysis
+# set to 1 if using baseflow, any other number will use regular Q
+use_base <- 1
 
 # generating a custom theme to get rid of the ugly ggplot defaults 
 theme_cust <- function(base_size = 11, base_family = "") {
@@ -48,40 +52,55 @@ data_org <- function(gage_data){
   select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
   mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
          Q_m3s = Q*0.028316847,
-         Q_mm_s = (Q_m3s/gage_stat$area_m3[ gage_stat$Site_id == site])*1000, #normalizing Q by wtrshd area and converting to mm 
+         Q_mm_d = (Q_m3s/gage_stat$area_m3[ gage_stat$Site_id == site])*1000*60*60*24, #normalizing Q by wtrshd area and converting to mm 
          period = NA,
-         Q_filled = na_interpolation(Q_mm_s, option = 'linear', maxgap = Inf),
+         Q_filled = na_interpolation(Q_mm_d, option = 'linear', maxgap = Inf),
          SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
-         Q_smoothed = rollapply(Q_mm_s,swindow,mean, na.rm = TRUE, fill = NA),
+         Q_smoothed = rollapply(Q_mm_d,swindow,mean, na.rm = TRUE, fill = NA),
          SC_smoothed = rollapply(SC,swindow,mean, na.rm = TRUE, fill = NA)) %>%
   rowid_to_column('count')
 }
 
 # Define function to convert time series data to daily 
-# this used to be hourly but was changed to daily so there is a legacy of variable names using hourly
-hourly<- function(merged){
+# second part of this function calculates base flow and adds it to the daily dataset 
+daily<- function(merged){
   merged %>%
-    mutate(datetime_hourly = cut(datetime, 'day')) %>%
-    group_by(datetime_hourly) %>% 
+    mutate(datetime_daily = cut(datetime, 'day')) %>%
+    group_by(datetime_daily) %>% 
     summarise(SC_mean = mean(SC_filled),
               Q_mean = mean(Q_filled)) %>%
     na.omit()
 }
 
+base <- function(mean_dat){ 
+    mean_dat %>%  
+    rename(Date = datetime_daily,Q= Q_mean) %>%
+    select(Date,Q) %>%
+    baseflows( ts = "daily")
+}
+
+
+
 # Define function to normalize ts data and convert to an xts object 
-hourly_norm <- function(hourly_D){
-  hourly_D %>%
-  mutate(datetime_hourly = ymd(datetime_hourly),   
-       SC_norm = ((SC_mean)-min(na.omit(SC_mean)))/(max(na.omit(SC_mean))-min(na.omit(SC_mean))),
-       Q_norm = (Q_mean-min(na.omit(Q_mean)))/(max(na.omit(Q_mean))-min(na.omit(Q_mean)))) %>%
-  select(datetime_hourly, SC_norm, Q_norm) %>%
-  xts(.[,-1], order.by = as.POSIXct(.$datetime_hourly))
+daily_norm <- function(daily_D){
+  daily_D %>%
+  mutate(datetime_daily = ymd(datetime_daily))
+        SC_norm <- ((daily_D$SC_mean)-min(na.omit(daily_D$SC_mean)))/(max(na.omit(daily_D$SC_mean))-min(na.omit(daily_D$SC_mean)))
+       if (use_base == 1){
+       Q_norm <- ((daily_D$base-min(na.omit(daily_D$base)))/(max(na.omit(daily_D$base))-min(na.omit(daily_D$base)))) 
+        }else{
+       Q_norm <- ((daily_D$Q_mean-min(na.omit(daily_D$Q_mean)))/(max(na.omit(daily_D$Q_mean))-min(na.omit(daily_D$Q_mean))))
+        }
+  daily_D <- cbind(daily_D,SC_norm,Q_norm)
+  daily_D %>%
+  select(datetime_daily, SC_norm, Q_norm) %>%
+  xts(.[,-1], order.by = as.POSIXct(.$datetime_daily))
 }
 
 # define function to find membership breaks
-membership_breaks <- function(memb, hourly){
+membership_breaks <- function(memb, daily){
   for (k  in 1:length(unique(memb))) {
-    temp <- hourly$datetime_hourly[which(memb==k)]
+    temp <- daily$datetime_daily[which(memb==k)]
     if (k== 1){
       p_time <- as.POSIXct(tail(temp,n=1)) 
     } else{
@@ -148,7 +167,6 @@ gauge_data22 <- readNWISdata(sites = site, service = 'iv', parameterCd = params,
 gauge_data22 <- data_org(gauge_data22)
 
 
-
 ##### weather data #####
 ## load in weather data
 # loading the 15 min met data from the 990m weather station. Data from Baker et al., 2019 (USGS data publication) 
@@ -182,33 +200,34 @@ precip18 <- full_wx %>%
          temp = site_temp)
 
 # 2019 
- precip19 <- full_wx %>%
-   dplyr::filter(local_time >= min(gauge_data19$datetime),
-                 local_time <= max(gauge_data19$datetime)) %>%
-   select(precip_int = TPGIncremental,
-          datetime = local_time, 
-          temp = site_temp)
+precip19 <- full_wx %>%
+  dplyr::filter(local_time >= min(gauge_data19$datetime),
+                local_time <= max(gauge_data19$datetime)) %>%
+  select(precip_int = TPGIncremental,
+         datetime = local_time, 
+         temp = site_temp)
 
 # 2020 
- precip20 <- full_wx %>%
-   dplyr::filter(local_time >= min(gauge_data20$datetime),
-                 local_time <= max(gauge_data20$datetime)) %>%
-   select(precip_int = TPGIncremental,
-          datetime = local_time, 
-          temp = site_temp)
- 
- # 2021 
- precip21 <- full_wx %>%
-   dplyr::filter(local_time >= min(gauge_data21$datetime),
-                 local_time <= max(gauge_data21$datetime)) %>%
-   select(precip_int = TPGIncremental,
-          datetime = local_time, 
-          temp = site_temp)
+precip20 <- full_wx %>%
+  dplyr::filter(local_time >= min(gauge_data20$datetime),
+                local_time <= max(gauge_data20$datetime)) %>%
+  select(precip_int = TPGIncremental,
+         datetime = local_time, 
+         temp = site_temp)
+
+# 2021 
+precip21 <- full_wx %>%
+  dplyr::filter(local_time >= min(gauge_data21$datetime),
+                local_time <= max(gauge_data21$datetime)) %>%
+  select(precip_int = TPGIncremental,
+         datetime = local_time, 
+         temp = site_temp)
+
 
 ##### Working with the time series data #####
  
 ##### Depth-constrained clustering (to constrain clusters in time) #####
-# 1-hour intervals - averaging the Q and EC
+# daily intervals - averaging the Q and EC
 
 ### 2016
 ## prep data
@@ -219,11 +238,15 @@ merged16 <- gauge_data16 %>%
 merged16$precip_int[is.nan(merged16$precip_int)] <- NA
 merged16$precip_int <- na_interpolation(merged16$precip_int, maxgap = Inf, option = 'linear')
 
-# create hourly ts
-hourly16 <- hourly(merged16)
+# create daily ts 
+daily16 <- daily(merged16)
+
+#calculate baseflow and add it to the daily dataset
+base16 <-base(daily16)
+daily16<-cbind(daily16,base = base16$bf)
 
 # normalize data, convert to xts
-norm16 <- hourly_norm(hourly16)
+norm16 <- daily_norm(daily16)
   
 ## run depth constrained clustering
 # distance matrix
@@ -241,12 +264,12 @@ memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick <
 
 
 # find membership breaks
-memb_break16 <- membership_breaks(memb, hourly16)
+memb_break16 <- membership_breaks(memb, daily16)
 memb_break16
 
 ## visualize results
 # c-q plot
-ggplot(hourly16, aes(x=Q_mean , y= SC_mean)) +
+ggplot(daily16, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -254,7 +277,7 @@ ggplot(hourly16, aes(x=Q_mean , y= SC_mean)) +
   theme_cust()
  
 # q ts
-ggplot(hourly16, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(daily16, aes(x= ymd(datetime_daily), y= base)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -271,11 +294,15 @@ merged17 <- gauge_data17 %>%
   merged17$precip_int[is.nan(merged17$precip_int)] <- NA
   merged17$precip_int <- na_interpolation(merged17$precip_int, maxgap = Inf, option = 'linear')
  
-# create hourly ts
-  hourly17 <- hourly(merged17)
+# create daily ts
+  daily17 <- daily(merged17)
+  
+#calculate baseflow and add it to the daily dataset
+  base17 <-base(daily17)
+  daily17<-cbind(daily17,base = base17$bf)
   
 # normalize data, convert to xts
-  norm17 <- hourly_norm(hourly17)
+  norm17 <- daily_norm(daily17)
  
 ## run depth constrained clustering
 # distance matrix
@@ -292,20 +319,20 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
-memb_break17 <- membership_breaks(memb, hourly17)
+memb_break17 <- membership_breaks(memb, daily17)
 memb_break17
  
 ## visualize results
 # c-q plot
-ggplot(hourly17, aes(x=Q_mean , y= SC_mean)) +
+ggplot(daily17, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
-  xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
+  xlab(expression(paste("Q ( mm d"^"-1", ")")))+
   ylab(expression(paste("EC (" ,  mu,  "S cm"^"-1", ")"))) + 
   theme_cust()
  
 # q ts
-ggplot(hourly17, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(daily17, aes(x= ymd(datetime_daily), y= base)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -313,7 +340,7 @@ ggplot(hourly17, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   xlab(NULL) + 
   theme_cust()
 
-ggplot(hourly17, aes(x= ymd(datetime_hourly), y= SC_mean/Q_mean)) +
+ggplot(daily17, aes(x= ymd(datetime_daily), y= SC_mean/Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -330,11 +357,15 @@ merged18 <- gauge_data18 %>%
 merged18$precip_int[is.nan(merged18$precip_int)] <- NA
 merged18$precip_int <- na_interpolation(merged18$precip_int, maxgap = Inf, option = 'linear')
 
-# create hourly ts
-hourly18 <- hourly(merged18)
+# create daily ts
+daily18 <- daily(merged18)
+
+#calculate baseflow and add it to the daily dataset
+base18 <-base(daily18)
+daily18<-cbind(daily18,base = base18$bf)
 
 # normalize data, convert to xts
-norm18 <- hourly_norm(hourly18)
+norm18 <- daily_norm(daily18)
 
 ## run depth constrained clustering
 # distance matrix
@@ -351,12 +382,12 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
-memb_break18 <- membership_breaks(memb, hourly18)
+memb_break18 <- membership_breaks(memb, daily18)
 memb_break18
 
 ## visualize results
 # c-q plot
-ggplot(hourly18, aes(x=Q_mean , y= SC_mean)) +
+ggplot(daily18, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -364,7 +395,7 @@ ggplot(hourly18, aes(x=Q_mean , y= SC_mean)) +
   theme_cust()
 
 # q ts
-ggplot(hourly18, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(daily18, aes(x= ymd(datetime_daily), y= base)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -372,7 +403,7 @@ ggplot(hourly18, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   xlab(NULL) + 
   theme_cust()
 
-ggplot(hourly18, aes(x= ymd(datetime_hourly), y= SC_mean/Q_mean)) +
+ggplot(daily18, aes(x= ymd(datetime_daily), y= SC_mean/Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -390,11 +421,15 @@ merged19 <- gauge_data19 %>%
 merged19$precip_int[is.nan(merged19$precip_int)] <- NA
 merged19$precip_int <- na_interpolation(merged19$precip_int, maxgap = Inf, option = 'linear')
 
-# create hourly ts
-hourly19 <- hourly(merged19)
+# create daily ts
+daily19 <- daily(merged19)
+
+#calculate baseflow and add it to the daily dataset
+base19 <-base(daily19)
+daily19<-cbind(daily19,base = base19$bf)
 
 # normalize data, convert to xts
-norm19 <- hourly_norm(hourly19)
+norm19 <- daily_norm(daily19)
 
 ## run depth constrained clusterin
 # distance matrix
@@ -411,12 +446,12 @@ bstk <- bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,k= min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
 
 # find membership breaks
-memb_break19 <- membership_breaks(memb, hourly19)
+memb_break19 <- membership_breaks(memb, daily19)
 memb_break19
 
 ## visualize results
 # c-q plot
-ggplot(hourly19, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(daily19, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("ln Q (m"^"3","s"^"-1", ")")))+
@@ -424,7 +459,7 @@ ggplot(hourly19, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(hourly19, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(daily19, aes(x= ymd(datetime_daily), y= base)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -432,7 +467,7 @@ ggplot(hourly19, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   xlab(NULL) + 
   theme_cust()
 
-ggplot(hourly19, aes(x= ymd(datetime_hourly), y= SC_mean/Q_mean)) +
+ggplot(daily19, aes(x= ymd(datetime_daily), y= SC_mean/Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -449,11 +484,15 @@ merged20 <- gauge_data20 %>%
 merged20$precip_int[is.nan(merged20$precip_int)] <- NA
 merged20$precip_int <- na_interpolation(merged20$precip_int, maxgap = Inf, option = 'linear')
 
-# create hourly ts
-hourly20 <- hourly(merged20)
+# create daily ts
+daily20 <- daily(merged20)
+
+#calculate baseflow and add it to the daily dataset
+base20 <-base(daily20)
+daily20<-cbind(daily20,base = base20$bf)
 
 # normalize data, convert to xts
-norm20 <- hourly_norm(hourly20)
+norm20 <- daily_norm(daily20)
 
 ## run depth constrained clustering
 # distance matrix
@@ -470,12 +509,12 @@ bstk <- bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
 
 # find membership breaks
-memb_break20 <- membership_breaks(memb, hourly20)
+memb_break20 <- membership_breaks(memb, daily20)
 memb_break20
 
 ## visualize results
 # c-q plot
-ggplot(hourly20, aes(x=Q_mean , y= SC_mean)) +
+ggplot(daily20, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -483,7 +522,7 @@ ggplot(hourly20, aes(x=Q_mean , y= SC_mean)) +
   theme_cust()
 
 # q ts
-ggplot(hourly20, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(daily20, aes(x= ymd(datetime_daily), y= base)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -491,7 +530,7 @@ ggplot(hourly20, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   xlab(NULL) + 
   theme_cust()
 
-ggplot(hourly20, aes(x= ymd(datetime_hourly), y= SC_mean/Q_mean)) +
+ggplot(daily20, aes(x= ymd(datetime_daily), y= SC_mean/Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -508,11 +547,15 @@ merged21 <- gauge_data21 %>%
 merged21$precip_int[is.nan(merged21$precip_int)] <- NA
 #merged21$precip_int <- na_interpolation(merged21$precip_int, maxgap = Inf, option = 'linear')
 
-# create hourly ts
-hourly21 <- hourly(merged21)
+# create daily ts
+daily21 <- daily(merged21)
+
+#calculate baseflow and add it to the daily dataset
+base21 <-base(daily21)
+daily21<-cbind(daily21,base = base21$bf)
 
 # normalize data, convert to xts
-norm21 <- hourly_norm(hourly21)
+norm21 <- daily_norm(daily21)
 
 ## run depth constrained clustering
 # distance matrix
@@ -530,12 +573,12 @@ bstk <- bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,5) 
 
 # find membership breaks
-memb_break21 <- membership_breaks(memb, hourly21)
+memb_break21 <- membership_breaks(memb, daily21)
 memb_break21
 
 ## visualize results
 # c-q plot
-ggplot(hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(daily21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -543,7 +586,7 @@ ggplot(hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(daily21, aes(x= ymd(datetime_daily), y= base)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -560,11 +603,15 @@ merged22 <- gauge_data22 %>%
 merged21$precip_int[is.nan(merged21$precip_int)] <- NA
 #merged21$precip_int <- na_interpolation(merged21$precip_int, maxgap = Inf, option = 'linear')
 
-# create hourly ts
-hourly22 <- hourly(merged22)
+# create daily ts
+daily22 <- daily(merged22)
+
+#calculate baseflow and add it to the daily dataset
+base22 <-base(daily22)
+daily22<-cbind(daily22,base = base22$bf)
 
 # normalize data, convert to xts
-norm22 <- hourly_norm(hourly22)
+norm22 <- daily_norm(daily22)
 
 ## run depth constrained clustering
 # distance matrix
@@ -582,12 +629,12 @@ bstk <- bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,5) 
 
 # find membership breaks
-memb_break22 <- membership_breaks(memb, hourly22)
+memb_break22 <- membership_breaks(memb, daily22)
 memb_break22
 
 ## visualize results
 # c-q plot
-ggplot(hourly22, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(daily22, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -595,7 +642,7 @@ ggplot(hourly22, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(hourly22, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(daily22, aes(x= ymd(datetime_daily), y= base)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -629,13 +676,13 @@ ggplot(memb_break_df, aes(x = doy, y = year, color = as.factor(break_num))) +
  geom_point()
 
 if (writecsv == 1){ 
-  write.csv(hourly16,"hourly_16.csv", row.names = FALSE)
-  write.csv(hourly17,"hourly_17.csv", row.names = FALSE)
-  write.csv(hourly18,"hourly_18.csv", row.names = FALSE)
-  write.csv(hourly19,"hourly_19.csv", row.names = FALSE)
-  write.csv(hourly20,"hourly_20.csv", row.names = FALSE)
-  write.csv(hourly21,"merged_21.csv", row.names = FALSE)
-  write.csv(hourly22,"merged_22.csv", row.names = FALSE)
+  write.csv(daily16,"daily_16.csv", row.names = FALSE)
+  write.csv(daily17,"daily_17.csv", row.names = FALSE)
+  write.csv(daily18,"daily_18.csv", row.names = FALSE)
+  write.csv(daily19,"daily_19.csv", row.names = FALSE)
+  write.csv(daily20,"daily_20.csv", row.names = FALSE)
+  write.csv(daily21,"merged_21.csv", row.names = FALSE)
+  write.csv(daily22,"merged_22.csv", row.names = FALSE)
 }
 
 ########### Pulling in NWIS data from other sites ##############
@@ -694,11 +741,11 @@ ggplot(Taku_data21, aes(x = datetime, y = Q_m3s)) +
 ### Clustering
 ## prep data
 
-# create hourly ts
-T_hourly19 <- hourly(Taku_data19)
+# create daily ts
+T_daily19 <- daily(Taku_data19)
 
 # normalize data, convert to xts
-T_norm19 <- hourly_norm(T_hourly19) 
+T_norm19 <- daily_norm(T_daily19) 
 
 ## run depth constrained clusterin
 # distance matrix
@@ -715,12 +762,12 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
-T_memb_break19 <- membership_breaks(memb, T_hourly19)
+T_memb_break19 <- membership_breaks(memb, T_daily19)
 T_memb_break19
 
 ## visualize results
 # c-q plot
-ggplot(T_hourly19, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(T_daily19, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -728,7 +775,7 @@ ggplot(T_hourly19, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(T_hourly19, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(T_daily19, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -738,11 +785,11 @@ ggplot(T_hourly19, aes(x= ymd(datetime_hourly), y= Q_mean)) +
 
 ########## 2020 ############
 ## prep data
-# create hourly ts
-T_hourly20 <- hourly(Taku_data20) 
+# create daily ts
+T_daily20 <- daily(Taku_data20) 
 
 # normalize data, convert to xts
-T_norm20 <- hourly_norm(T_hourly20) 
+T_norm20 <- daily_norm(T_daily20) 
 
 ## run depth constrained clustering
 # distance matrix
@@ -760,12 +807,12 @@ memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick <
 
 
 # find membership breaks
-T_memb_break20 <- membership_breaks(memb, T_hourly20)
+T_memb_break20 <- membership_breaks(memb, T_daily20)
 T_memb_break20
 
 ## visualize results
 # c-q plot
-ggplot(T_hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(T_daily20, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -773,7 +820,7 @@ ggplot(T_hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(T_hourly20, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(T_daily20, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -785,11 +832,11 @@ ggplot(T_hourly20, aes(x= ymd(datetime_hourly), y= Q_mean)) +
 
 ########## 2021 ############
 ## prep data
-# create hourly ts
-T_hourly21 <- hourly(Taku_data21)
+# create daily ts
+T_daily21 <- daily(Taku_data21)
 
 # normalize data, convert to xts
-T_norm21 <- hourly_norm(T_hourly21) 
+T_norm21 <- daily_norm(T_daily21) 
 
 ## run depth constrained clusterin
 # distance matrix
@@ -807,12 +854,12 @@ memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick <
 
 
 # find membership breaks
-T_memb_break21 <- membership_breaks(memb, T_hourly21)
+T_memb_break21 <- membership_breaks(memb, T_daily21)
 T_memb_break21
 
 ## visualize results
 # c-q plot
-ggplot(T_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(T_daily21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -820,7 +867,7 @@ ggplot(T_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(T_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(T_daily21, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -830,9 +877,9 @@ ggplot(T_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
 
 # Writing Taku data to .csv files
 if (writecsv == 1){
-  write.csv(T_hourly19,"Taku_hr19.csv", row.names = FALSE)
-  write.csv(T_hourly20,"Taku_hr20.csv", row.names = FALSE)
-  write.csv(T_hourly21,"Taku_hr21.csv", row.names = FALSE)
+  write.csv(T_daily19,"Taku_hr19.csv", row.names = FALSE)
+  write.csv(T_daily20,"Taku_hr20.csv", row.names = FALSE)
+  write.csv(T_daily21,"Taku_hr21.csv", row.names = FALSE)
 }
 
 ############ Stikine ####################
@@ -856,11 +903,11 @@ ggplot(Stikine_data20, aes(x = datetime, y = Q_m3s)) +
 
 ########## 2020 ############
 ## prep data
-# create hourly ts
-S_hourly20 <- hourly(Stikine_data20) 
+# create daily ts
+S_daily20 <- daily(Stikine_data20) 
 
 # normalize data, convert to xts
-S_norm20 <- hourly_norm(S_hourly20) 
+S_norm20 <- daily_norm(S_daily20) 
 
 ## run depth constrained clustering
 # distance matrix
@@ -877,12 +924,12 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
-S_memb_break20 <- membership_breaks(memb, S_hourly20)
+S_memb_break20 <- membership_breaks(memb, S_daily20)
 S_memb_break20
 
 ## visualize results
 # c-q plot
-ggplot(S_hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(S_daily20, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -890,7 +937,7 @@ ggplot(S_hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(S_hourly20, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(S_daily20, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -899,7 +946,7 @@ ggplot(S_hourly20, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   theme_cust()
 
 if (writecsv == 1){
-  write.csv(S_hourly20,"Stikine_hr20.csv", row.names = FALSE)
+  write.csv(S_daily20,"Stikine_hr20.csv", row.names = FALSE)
 }
 
 ############ Unuk ####################
@@ -923,11 +970,11 @@ ggplot(Unuk_data21, aes(x = datetime, y = Q_m3s)) +
 
 ########## 2021 ############
 ## prep data
-# create hourly ts
-U_hourly21 <- hourly(Unuk_data21) 
+# create daily ts
+U_daily21 <- daily(Unuk_data21) 
 
 # normalize data, convert to xts
-U_norm21 <- hourly_norm(U_hourly21) 
+U_norm21 <- daily_norm(U_daily21) 
 
 ## run depth constrained clusterin
 # distance matrix
@@ -944,12 +991,12 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
-U_memb_break21 <- membership_breaks(memb, U_hourly21)
+U_memb_break21 <- membership_breaks(memb, U_daily21)
 U_memb_break21
 
 ## visualize results
 # c-q plot
-ggplot(U_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(U_daily21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -957,7 +1004,7 @@ ggplot(U_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(U_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(U_daily21, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -966,7 +1013,7 @@ ggplot(U_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   theme_cust()
 
 if (writecsv == 1){
-  write.csv(U_hourly21,"Unuk_hr21.csv", row.names = FALSE)
+  write.csv(U_daily21,"Unuk_hr21.csv", row.names = FALSE)
 }
 
 ############ Salmon #################### Too much missing data? Both years
@@ -988,11 +1035,11 @@ ggplot(Salmon_data20, aes(x = datetime, y = Q_m3s)) +
   theme_cust()
 
 ## prep data
-# create hourly ts
-Sa_hourly20 <- hourly(Salmon_data20) 
+# create daily ts
+Sa_daily20 <- daily(Salmon_data20) 
 
 # normalize data, convert to xts
-Sa_norm20 <- hourly_norm(Sa_hourly20) 
+Sa_norm20 <- daily_norm(Sa_daily20) 
 
 ## run depth constrained clusterin
 # distance matrix
@@ -1009,11 +1056,11 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
-Sa_memb_break20 <- membership_breaks(memb, Sa_hourly20)
+Sa_memb_break20 <- membership_breaks(memb, Sa_daily20)
 
 ## visualize results
 # c-q plot
-ggplot(Sa_hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(Sa_daily20, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -1021,7 +1068,7 @@ ggplot(Sa_hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(Sa_hourly20, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(Sa_daily20, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -1047,11 +1094,11 @@ ggplot(Salmon_data21, aes(x = datetime, y = Q_m3s)) +
   theme_cust()
 
 ## prep data
-# create hourly ts
-Sa_hourly21 <- hourly(Salmon_data21) 
+# create daily ts
+Sa_daily21 <- daily(Salmon_data21) 
 
 # normalize data, convert to xts
-Sa_norm21 <- hourly_norm(Sa_hourly21)
+Sa_norm21 <- daily_norm(Sa_daily21)
 
 ## run depth constrained clusterin
 # distance matrix
@@ -1069,11 +1116,11 @@ memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick <
 memb <- cutree(dep_clust,k=5) 
 
 # find membership breaks
-Sa_memb_break21 <- membership_breaks(memb, Sa_hourly21)
+Sa_memb_break21 <- membership_breaks(memb, Sa_daily21)
 
 ## visualize results
 # c-q plot
-ggplot(Sa_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(Sa_daily21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -1081,7 +1128,7 @@ ggplot(Sa_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(Sa_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(Sa_daily21, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -1090,8 +1137,8 @@ ggplot(Sa_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   theme_cust()
 
 if (writecsv==1) {
-  write.csv(Sa_hourly20,"Salmon_hr20.csv", row.names = FALSE)
-  write.csv(Sa_hourly21,"Salmon_hr21.csv", row.names = FALSE)
+  write.csv(Sa_daily20,"Salmon_hr20.csv", row.names = FALSE)
+  write.csv(Sa_daily21,"Salmon_hr21.csv", row.names = FALSE)
 }
 
 ############ Kennicott ####################
@@ -1114,11 +1161,11 @@ ggplot(Kennicott_data20, aes(x = datetime, y = Q_m3s)) +
 
 ########## 2020 ############
 ## prep data
-# create hourly ts
-K_hourly20 <- hourly(Kennicott_data20)
+# create daily ts
+K_daily20 <- daily(Kennicott_data20)
 
 # normalize data, convert to xts
-K_norm20 <- hourly_norm(K_hourly20)
+K_norm20 <- daily_norm(K_daily20)
 
 ## run depth constrained clustering
 # distance matrix
@@ -1135,11 +1182,11 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
 
 # find membership breaks
-K_memb_break20 <- membership_breaks(memb, K_hourly20)
+K_memb_break20 <- membership_breaks(memb, K_daily20)
 
 ## visualize results
 # c-q plot
-ggplot(K_hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(K_daily20, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -1147,7 +1194,7 @@ ggplot(K_hourly20, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(K_hourly20, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(K_daily20, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -1156,7 +1203,7 @@ ggplot(K_hourly20, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   theme_cust()
 
 if (writecsv == 1){
-  write.csv(K_hourly20,"Kennicott_hr20.csv", row.names = FALSE)
+  write.csv(K_daily20,"Kennicott_hr20.csv", row.names = FALSE)
 }
 
 ############### Hobo Data #########################
@@ -1223,11 +1270,11 @@ ggplot(Glacier_data22, aes(x = datetime, y = Q_m3s)) +
   theme_cust()
 
 ## prep data
-# create hourly ts
-Gl_hourly21 <- hourly(Glacier_data21) 
+# create daily ts
+Gl_daily21 <- daily(Glacier_data21) 
 
 # normalize data, convert to xts
-Gl_norm21 <- hourly_norm(Gl_hourly21) 
+Gl_norm21 <- daily_norm(Gl_daily21) 
 
 ## run depth constrained clusterin
 # distance matrix
@@ -1244,12 +1291,12 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
-Gl_memb_break21 <- membership_breaks(memb, Gl_hourly21)
+Gl_memb_break21 <- membership_breaks(memb, Gl_daily21)
 
 
 ## visualize results
 # c-q plot
-ggplot(Gl_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(Gl_daily21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -1257,7 +1304,7 @@ ggplot(Gl_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(Gl_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(Gl_daily21, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -1266,11 +1313,11 @@ ggplot(Gl_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   theme_cust()
 ### 2022 #####3
 ## prep data
-# create hourly ts
-Gl_hourly22 <- hourly(Glacier_data22) 
+# create daily ts
+Gl_daily22 <- daily(Glacier_data22) 
 
 # normalize data, convert to xts
-Gl_norm22 <- hourly_norm(Gl_hourly22) 
+Gl_norm22 <- daily_norm(Gl_daily22) 
 
 ## run depth constrained clusterin
 # distance matrix
@@ -1287,12 +1334,12 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
-Gl_memb_break22 <- membership_breaks(memb, Gl_hourly22)
+Gl_memb_break22 <- membership_breaks(memb, Gl_daily22)
 
 
 ## visualize results
 # c-q plot
-ggplot(Gl_hourly22, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(Gl_daily22, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -1300,7 +1347,7 @@ ggplot(Gl_hourly22, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(Gl_hourly22, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(Gl_daily22, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -1370,11 +1417,11 @@ ggplot(Snow_data22, aes(x = datetime, y = Q_m3s)) +
 
 
 ## prep data
-# create hourly ts
-Sn_hourly21 <- hourly(Snow_data21)
+# create daily ts
+Sn_daily21 <- daily(Snow_data21)
 
 # normalize data, convert to xts
-Sn_norm21 <- hourly_norm(Sn_hourly21) 
+Sn_norm21 <- daily_norm(Sn_daily21) 
 
 ## run depth constrained clusterin
 # distance matrix
@@ -1391,11 +1438,11 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
-Sn_memb_break21 <- membership_breaks(memb, Sn_hourly21)
+Sn_memb_break21 <- membership_breaks(memb, Sn_daily21)
 
 ## visualize results
 # c-q plot
-ggplot(Sn_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(Sn_daily21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -1403,7 +1450,7 @@ ggplot(Sn_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(Sn_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(Sn_daily21, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -1412,11 +1459,11 @@ ggplot(Sn_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   theme_cust()
 
 ## prep data
-# create hourly ts
-Sn_hourly22 <- hourly(Snow_data22)
+# create daily ts
+Sn_daily22 <- daily(Snow_data22)
 
 # normalize data, convert to xts
-Sn_norm22 <- hourly_norm(Sn_hourly22) 
+Sn_norm22 <- daily_norm(Sn_daily22) 
 
 ## run depth constrained clusterin
 # distance matrix
@@ -1433,11 +1480,11 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
-Sn_memb_break22 <- membership_breaks(memb, Sn_hourly22)
+Sn_memb_break22 <- membership_breaks(memb, Sn_daily22)
 
 ## visualize results
 # c-q plot
-ggplot(Sn_hourly22, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(Sn_daily22, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -1445,7 +1492,7 @@ ggplot(Sn_hourly22, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(Sn_hourly22, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(Sn_daily22, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -1485,11 +1532,11 @@ ggplot(Knik_data21, aes(x = datetime, y = Q_m3s)) +
   theme_cust()
 
 ## prep data
-# create hourly ts
-kn_hourly21 <- hourly(Knik_data21)
+# create daily ts
+kn_daily21 <- daily(Knik_data21)
 
 # normalize data, convert to xts
-Kn_norm21 <- hourly_norm(kn_hourly21)
+Kn_norm21 <- daily_norm(kn_daily21)
 
 ## run depth constrained clusterin
 # distance matrix
@@ -1506,11 +1553,11 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
-Kn_memb_break21 <- membership_breaks(memb, kn_hourly21)
+Kn_memb_break21 <- membership_breaks(memb, kn_daily21)
 
 ## visualize results
 # c-q plot
-ggplot(kn_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(kn_daily21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -1518,7 +1565,7 @@ ggplot(kn_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(kn_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(kn_daily21, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -1559,11 +1606,11 @@ ggplot(Kenai_data21, aes(x = datetime, y = Q_m3s)) +
   theme_cust()
 
 ## prep data
-# create hourly ts
-ken_hourly21 <- hourly(Kenai_data21) 
+# create daily ts
+ken_daily21 <- daily(Kenai_data21) 
 
 # normalize data, convert to xts
-ken_norm21 <- hourly_norm(ken_hourly21)
+ken_norm21 <- daily_norm(ken_daily21)
 
 ## run depth constrained clusterin
 # distance matrix
@@ -1580,11 +1627,11 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset(bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff)))
 
 # find membership breaks
-Ken_memb_break21 <- membership_breaks(memb, ken_hourly21)
+Ken_memb_break21 <- membership_breaks(memb, ken_daily21)
 
 ## visualize results
 # c-q plot
-ggplot(ken_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(ken_daily21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -1592,7 +1639,7 @@ ggplot(ken_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(ken_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(ken_daily21, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -1662,11 +1709,11 @@ ggplot(Sixmi_data22, aes(x = datetime, y = Q_m3s)) +
   theme_cust()
 
 ## prep data
-# create hourly ts
-sx_hourly21 <- hourly(Sixmi_data21)
+# create daily ts
+sx_daily21 <- daily(Sixmi_data21)
 
 # normalize data, convert to xts
-sx_norm21 <- hourly_norm(sx_hourly21) 
+sx_norm21 <- daily_norm(sx_daily21) 
 
 ## run depth constrained clusterin
 # distance matrix
@@ -1683,11 +1730,11 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
 
 # find membership breaks
-Sxm_memb_break21 <- membership_breaks(memb, sx_hourly21)
+Sxm_memb_break21 <- membership_breaks(memb, sx_daily21)
 
 ## visualize results
 # c-q plot
-ggplot(sx_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(sx_daily21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -1695,7 +1742,7 @@ ggplot(sx_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(sx_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(sx_daily21, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -1704,11 +1751,11 @@ ggplot(sx_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   theme_cust()
 
 ## prep data
-# create hourly ts
-sx_hourly22 <- hourly(Sixmi_data22)
+# create daily ts
+sx_daily22 <- daily(Sixmi_data22)
 
 # normalize data, convert to xts
-sx_norm22 <- hourly_norm(sx_hourly22) 
+sx_norm22 <- daily_norm(sx_daily22) 
 
 ## run depth constrained clusterin
 # distance matrix
@@ -1725,11 +1772,11 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
 
 # find membership breaks
-Sxm_memb_break22 <- membership_breaks(memb, sx_hourly22)
+Sxm_memb_break22 <- membership_breaks(memb, sx_daily22)
 
 ## visualize results
 # c-q plot
-ggplot(sx_hourly22, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(sx_daily22, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -1737,7 +1784,7 @@ ggplot(sx_hourly22, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(sx_hourly22, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(sx_daily22, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -1808,11 +1855,11 @@ ggplot(LSus_data22, aes(x = datetime, y = Q_m3s)) +
   theme_cust()
 
 ## prep data
-# create hourly ts
-ls_hourly21 <- hourly(LSus_data21)
+# create daily ts
+ls_daily21 <- daily(LSus_data21)
 
 # normalize data, convert to xts
-ls_norm21 <- hourly_norm(ls_hourly21)
+ls_norm21 <- daily_norm(ls_daily21)
 
 ## run depth constrained clusterin
 # distance matrix
@@ -1829,12 +1876,12 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
 
 # find membership breaks
-LSmemb_break21 <- membership_breaks(memb, ls_hourly21)
+LSmemb_break21 <- membership_breaks(memb, ls_daily21)
 
 
 ## visualize results
 # c-q plot
-ggplot(ls_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(ls_daily21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -1842,7 +1889,7 @@ ggplot(ls_hourly21, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(ls_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(ls_daily21, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -1851,11 +1898,11 @@ ggplot(ls_hourly21, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   theme_cust()
 
 ## prep data
-# create hourly ts
-ls_hourly22 <- hourly(LSus_data22)
+# create daily ts
+ls_daily22 <- daily(LSus_data22)
 
 # normalize data, convert to xts
-ls_norm22 <- hourly_norm(ls_hourly22)
+ls_norm22 <- daily_norm(ls_daily22)
 
 ## run depth constrained clusterin
 # distance matrix
@@ -1872,12 +1919,12 @@ bstk <-bstick(dep_clust, ng=20, plot=TRUE)
 memb <- cutree(dep_clust,min(subset( bstk$nGroups, bstk$dispersion-bstk$bstick < b_cutoff))) 
 
 # find membership breaks
-LSmemb_break21 <- membership_breaks(memb, ls_hourly22)
+LSmemb_break21 <- membership_breaks(memb, ls_daily22)
 
 
 ## visualize results
 # c-q plot
-ggplot(ls_hourly22, aes(x=log(Q_mean) , y= log(SC_mean))) +
+ggplot(ls_daily22, aes(x=log(Q_mean) , y= log(SC_mean))) +
   geom_point(aes(color= factor(memb)))+
   scale_colour_brewer(palette = "Paired")+
   xlab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
@@ -1885,7 +1932,7 @@ ggplot(ls_hourly22, aes(x=log(Q_mean) , y= log(SC_mean))) +
   theme_cust()
 
 # q ts
-ggplot(ls_hourly22, aes(x= ymd(datetime_hourly), y= Q_mean)) +
+ggplot(ls_daily22, aes(x= ymd(datetime_daily), y= Q_mean)) +
   geom_point(aes(color= factor(memb)))+
   #scale_color_discrete(drop=FALSE)+
   scale_colour_brewer(palette = "Paired")+
@@ -1894,7 +1941,7 @@ ggplot(ls_hourly22, aes(x= ymd(datetime_hourly), y= Q_mean)) +
   theme_cust()
 
 
-write.csv(ls_hourly21,"l_sus_hr21.csv", row.names = FALSE)
+write.csv(ls_daily21,"l_sus_hr21.csv", row.names = FALSE)
 
 ##### visualize membership breaks #####
 max_length <- max(c(length(T_memb_break19), length(T_memb_break20), length(T_memb_break21), length(S_memb_break20), 
@@ -1940,12 +1987,12 @@ ggplot(memb_break_dfall, aes(x = doy, y = year, color = as.factor(break_num))) +
 write.csv(memb_break_df,"combinedUSGS_clusters.csv", row.names = FALSE)
 
 if (writecsv ==1){
-  write.csv(Gl_hourly21,"Glacier_hr21.csv", row.names = FALSE)
-  write.csv(Sn_hourly21,"Snow_hr21.csv", row.names = FALSE)
-  write.csv(kn_hourly21,"Knik_hr21.csv", row.names = FALSE)
-  write.csv(ken_hourly21,"Kenai_hr21.csv", row.names = FALSE)
-  write.csv(sx_hourly21,"Sixmi_hr21.csv", row.names = FALSE)
-  write.csv(ls_hourly21,"l_sus_hr21.csv", row.names = FALSE)
+  write.csv(Gl_daily21,"Glacier_hr21.csv", row.names = FALSE)
+  write.csv(Sn_daily21,"Snow_hr21.csv", row.names = FALSE)
+  write.csv(kn_daily21,"Knik_hr21.csv", row.names = FALSE)
+  write.csv(ken_daily21,"Kenai_hr21.csv", row.names = FALSE)
+  write.csv(sx_daily21,"Sixmi_hr21.csv", row.names = FALSE)
+  write.csv(ls_daily21,"l_sus_hr21.csv", row.names = FALSE)
 }
 
 ############## Eran Hood's Data ####################
@@ -1987,15 +2034,13 @@ HerbertEC19$datetime <- round_date(HerbertEC19$datetime, "hour")
   
 ################################ Extra Code ############################## 
 
-
- 
  ##### Ca time series #########
  # ca_slope<- 0.1655
  # ca_int <- 1.6576
  # 
- # hourly_data17$Ca_ts <- (ca_slope* hourly_data17$SC_filled + ca_int) *1000* 86400* hourly_data17$Q_m3shourly /1e6
+ # daily_data17$Ca_ts <- (ca_slope* daily_data17$SC_filled + ca_int) *1000* 86400* daily_data17$Q_m3sdaily /1e6
  # 
- # ggplot(new_df17, aes(x= date , y= hourly_data17$Ca_ts)) +geom_point(aes(color= factor(memb)))+
+ # ggplot(new_df17, aes(x= date , y= daily_data17$Ca_ts)) +geom_point(aes(color= factor(memb)))+
  #   #scale_color_discrete(drop=FALSE)+
  #   scale_colour_brewer(palette = "Dark2")+
  #   ylab(expression(paste("Q (m"^"3","s"^"-1", ")")))+
