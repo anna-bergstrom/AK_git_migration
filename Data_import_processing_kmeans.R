@@ -52,7 +52,7 @@ data_org <- function(gage_data){
   select(datetime = dateTime, Q = X_00060_00000, SC = X_00095_00000) %>%
   mutate(datetime = with_tz(datetime, tz = 'America/Anchorage'),
          Q_m3s = Q*0.028316847,
-         Q_mm_d = (Q_m3s/gage_stat$area_m3[ gage_stat$Site_id == site])*1000*60*60*24, #normalizing Q by wtrshd area and converting to mm 
+         Q_mm_d = (Q_m3s/gage_stat$area_m3[ gage_stat$Site_id == site])*1000, #normalizing Q by wtrshd area and converting to mm 
          period = NA,
          Q_filled = na_interpolation(Q_mm_d, option = 'linear', maxgap = Inf),
          SC_filled = na_interpolation(SC, option = 'linear', maxgap = Inf),
@@ -69,7 +69,8 @@ daily<- function(merged){
     group_by(datetime_daily) %>% 
     summarise(SC_mean = mean(SC_filled),
               Q_mean = mean(Q_filled)) %>%
-    na.omit()
+    na.omit() %>%
+    mutate(Q_mean = Q_mean*60*60*24)
 }
 
 base <- function(mean_dat){ 
@@ -681,8 +682,8 @@ if (writecsv == 1){
   write.csv(daily18,"daily_18.csv", row.names = FALSE)
   write.csv(daily19,"daily_19.csv", row.names = FALSE)
   write.csv(daily20,"daily_20.csv", row.names = FALSE)
-  write.csv(daily21,"merged_21.csv", row.names = FALSE)
-  write.csv(daily22,"merged_22.csv", row.names = FALSE)
+  write.csv(daily21,"daily_21.csv", row.names = FALSE)
+  write.csv(daily22,"daily_22.csv", row.names = FALSE)
 }
 
 ########### Pulling in NWIS data from other sites ##############
